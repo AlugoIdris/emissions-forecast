@@ -1,0 +1,588 @@
+"""
+visualization.py
+----------------
+All publication-quality plots and stakeholder dashboards for the
+ensemble emissions forecasting pipeline.
+
+Covers:
+    - MAPE distribution box plot (Figure 1)
+    - Uncertainty decomposition bar chart (Figure 2)
+    - SHAP contribution comparison across models (Figure 3)
+    - 2030 target achievement probability distribution (Figure 4)
+    - Model agreement on target achievement (Figure 5)
+    - Stakeholder dashboard (6-panel summary)
+    - Facility-level dot-and-whisker accuracy plot
+
+All functions save to ``output_dir`` and optionally display inline.
+
+Authors : [Your Name]
+Paper   : "Ensemble Forecasting of Industrial Facility Emissions
+           Toward 2030 Targets" – Applied Energy (submitted 2026)
+License : MIT
+"""
+
+import logging
+import os
+from typing import Optional
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import seaborn as sns
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Global style
+# ---------------------------------------------------------------------------
+
+RISK_COLORS = {
+    "Low Risk":      "#2ecc71",
+    "Medium Risk":   "#f1c40f",
+    "High Risk":     "#e67e22",
+    "Critical Risk": "#e74c3c",
+    "Unknown":       "#bdc3c7",
+}
+
+MODEL_COLORS = {
+    "N-HiTS":   "#1f77b4",
+    "XGBoost":  "#ff7f0e",
+    "BNN":      "#2ca02c",
+    "Ensemble": "#9467bd",
+}
+
+def _apply_style() -> None:
+    sns.set_style("whitegrid")
+    plt.rcParams.update({
+        "font.size":        11,
+        "axes.labelsize":   12,
+        "axes.titlesize":   14,
+        "legend.fontsize":  10,
+        "figure.dpi":       150,
+        "savefig.dpi":      300,
+        "savefig.bbox":     "tight",
+    })
+
+def _save(fig: plt.Figure, path: str, show: bool) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    fig.savefig(path, dpi=300, bbox_inches="tight")
+    logger.info("Saved: %s", path)
+    if show:
+        plt.show()
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Figure 1 — MAPE Distribution Box Plot
+# ---------------------------------------------------------------------------
+
+def plot_mape_distribution(
+    results_df: pd.DataFrame,
+    output_dir: str = "figures",
+    show: bool = True,
+) -> str:
+    """Box plot of per-facility MAPE distributions for each base model.
+
+    Args:
+        results_df: DataFrame with columns ``NHITSMAPE``, ``XGBoostMAPE``,
+                    ``BNNMAPE`` (and optionally ``EnsembleMAPE``).
+        output_dir: Directory to save the figure.
+        show:       Display inline if True.
+
+    Returns:
+        Saved file path.
+    """
+    _apply_style()
+
+    model_cols = {
+        "N-HiTS":   "NHITSMAPE",
+        "XGBoost":  "XGBoostMAPE",
+        "BNN":      "BNNMAPE",
+    }
+    if "EnsembleMAPE" in results_df.columns:
+        model_cols["Ensemble"] = "EnsembleMAPE"
+
+    data_to_plot = [results_df[col].dropna().values for col in model_cols.values()]
+    labels       = list(model_cols.keys())
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    bp = ax.boxplot(
+        data_to_plot,
+        labels=labels,
+        patch_artist=True,
+        medianprops=dict(color="red", linewidth=2),
+        boxprops=dict(facecolor="lightblue", alpha=0.7),
+    )
+
+    for i, data in enumerate(data_to_plot):
+        ax.plot(i + 1, np.mean(data), marker="D", markersize=8, color="green",
+                label="Mean" if i == 0 else "")
+
+    ax.set_ylabel("MAPE (%)", fontsize=12)
+    ax.set_xlabel("Model", fontsize=12)
+    ax.set_title("Model Accuracy Distribution Across Facilities", fontsize=14, fontweight="bold")
+    ax.grid(axis="y", alpha=0.3)
+    ax.legend()
+
+    path = os.path.join(output_dir, "figure1_mape_boxplot.png")
+    _save(fig, path, show)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Figure 2 — Uncertainty Decomposition
+# ---------------------------------------------------------------------------
+
+def plot_uncertainty_decomposition(
+    risk_df: pd.DataFrame,
+    results_df: pd.DataFrame,
+    selected_facilities: Optional[list] = None,
+    output_dir: str = "figures",
+    show: bool = True,
+) -> str:
+    """Stacked bar chart decomposing aleatoric vs epistemic uncertainty.
+
+    Within-model variance (aleatoric) = weighted combination of per-model stds.
+    Between-model variance (epistemic) = weighted spread across model predictions.
+
+    Args:
+        risk_df:              Output of ``compute_calibrated_probabilities``.
+        results_df:           Per-facility model MAPE results.
+        selected_facilities:  List of facility IDs to plot (default: top 5 by uncertainty).
+        output_dir:           Directory to save the figure.
+        show:                 Display inline if True.
+
+    Returns:
+        Saved file path.
+    """
+    _apply_style()
+
+    if selected_facilities is None:
+        selected_facilities = (
+            risk_df.nlargest(5, "UncertaintyEnsemble")["Facility"].tolist()
+        )
+
+    decomp_records = []
+    for fac in selected_facilities:
+        fac_data = risk_df[risk_df["Facility"] == fac]
+        if len(fac_data) == 0:
+            continue
+
+        pred_xgb = fac_data["PredictionXGBoost"].values[0]
+        pred_bnn = fac_data["PredictionBNN"].values[0]
+        pred_ens = fac_data["PredictionEnsemble"].values[0]
+        unc_xgb  = fac_data["UncertaintyXGBoost"].values[0]
+        unc_bnn  = fac_data["UncertaintyBNN"].values[0]
+        unc_ens  = fac_data["UncertaintyEnsemble"].values[0]
+
+        fac_results = results_df[results_df["Facility"] == fac]
+        xgb_mape = fac_results["XGBoostMAPE"].values[0] if len(fac_results) > 0 else 25.0
+        bnn_mape = fac_results["BNNMAPE"].values[0]     if len(fac_results) > 0 else 60.0
+
+        w_xgb = (1.0 / (xgb_mape + 1.0)) ** 2
+        w_bnn = (1.0 / (bnn_mape + 1.0)) ** 2
+        total_w = w_xgb + w_bnn
+        w_xgb /= total_w
+        w_bnn /= total_w
+
+        within_model = np.sqrt(w_xgb**2 * unc_xgb**2 + w_bnn**2 * unc_bnn**2)
+        between_model = np.sqrt(
+            w_xgb * (pred_xgb - pred_ens)**2 + w_bnn * (pred_bnn - pred_ens)**2
+        )
+
+        decomp_records.append({
+            "Facility":    fac,
+            "WithinModel": within_model,
+            "BetweenModel": between_model,
+            "Total":       unc_ens,
+        })
+
+    decomp_df = pd.DataFrame(decomp_records)
+    x     = np.arange(len(decomp_df))
+    width = 0.6
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.bar(x, decomp_df["WithinModel"],  width, label="Within-Model (Aleatoric)", color="#1f77b4", alpha=0.8)
+    ax.bar(x, decomp_df["BetweenModel"], width, bottom=decomp_df["WithinModel"],
+           label="Between-Model (Epistemic)", color="#ff7f0e", alpha=0.8)
+    ax.plot(x, decomp_df["Total"], marker="o", color="red", linewidth=2,
+            markersize=8, label="Total Uncertainty")
+
+    ax.set_ylabel("Uncertainty (tCO₂)", fontsize=12)
+    ax.set_xlabel("Facility", fontsize=12)
+    ax.set_title("Ensemble Uncertainty Decomposition — Selected Facilities",
+                 fontsize=14, fontweight="bold")
+    ax.set_xticks(x)
+    ax.set_xticklabels(decomp_df["Facility"])
+    ax.legend()
+    ax.grid(axis="y", alpha=0.3)
+
+    path = os.path.join(output_dir, "figure2_uncertainty_decomposition.png")
+    _save(fig, path, show)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Figure 3 — SHAP Contribution Comparison
+# ---------------------------------------------------------------------------
+
+def plot_shap_comparison(
+    shap_summary: pd.DataFrame,
+    top_n: int = 10,
+    output_dir: str = "figures",
+    show: bool = True,
+) -> str:
+    """Grouped bar chart comparing SHAP feature importance across models.
+
+    Args:
+        shap_summary: Output of ``aggregate_shap_records`` from evaluation.py.
+        top_n:        Number of top features to display.
+        output_dir:   Directory to save the figure.
+        show:         Display inline if True.
+
+    Returns:
+        Saved file path.
+    """
+    _apply_style()
+
+    top = shap_summary.head(top_n)
+    x   = np.arange(len(top))
+    w   = 0.25
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.bar(x - w,   top["XGBContribution"],   w, label="XGBoost",  color="#1f77b4")
+    ax.bar(x,       top["BNNContribution"],    w, label="BNN",      color="#ff7f0e")
+    ax.bar(x + w,   top["NHITSContribution"],  w, label="N-HiTS",   color="#2ca02c")
+
+    ax.set_ylabel("SHAP Contribution (%)", fontsize=12)
+    ax.set_title(
+        "Model Attribution Complementarity — XGBoost (Operational) "
+        "vs BNN (Temporal) vs N-HiTS (Time Series)",
+        fontsize=13, fontweight="bold",
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels(top["Feature"], rotation=45, ha="right")
+    ax.legend()
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+
+    path = os.path.join(output_dir, "figure3_shap_comparison.png")
+    _save(fig, path, show)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Figure 4 — Target Achievement Probability Distribution
+# ---------------------------------------------------------------------------
+
+def plot_probability_distribution(
+    risk_df: pd.DataFrame,
+    output_dir: str = "figures",
+    show: bool = True,
+) -> str:
+    """Bar chart of 2030 compliance probability per facility, coloured by risk.
+
+    Args:
+        risk_df:    Output of ``compute_calibrated_probabilities``.
+        output_dir: Directory to save the figure.
+        show:       Display inline if True.
+
+    Returns:
+        Saved file path.
+    """
+    _apply_style()
+
+    prob_sorted = risk_df.sort_values("ProbMeetTargetEnsemble").reset_index(drop=True)
+    colors = prob_sorted["RiskLevelEnsemble"].map(RISK_COLORS).fillna("#bdc3c7")
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.bar(range(len(prob_sorted)), prob_sorted["ProbMeetTargetEnsemble"] * 100,
+           color=colors)
+    ax.axhline(y=50, color="black", linestyle="--", linewidth=1.5, label="50% threshold")
+
+    ax.set_xlabel("Facility (sorted by probability)", fontsize=12)
+    ax.set_ylabel("Target Achievement Probability (%)", fontsize=12)
+    ax.set_title("2030 Target Achievement Probability by Facility",
+                 fontsize=14, fontweight="bold")
+    ax.set_xticks(range(len(prob_sorted)))
+    ax.set_xticklabels(prob_sorted["Facility"], rotation=90, fontsize=8)
+
+    legend_patches = [
+        mpatches.Patch(color=color, label=label)
+        for label, color in RISK_COLORS.items()
+        if label != "Unknown"
+    ]
+    ax.legend(handles=[ax.get_lines()[0]] + legend_patches, loc="upper left")
+    plt.tight_layout()
+
+    path = os.path.join(output_dir, "figure4_probability_distribution.png")
+    _save(fig, path, show)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Figure 5 — Model Agreement on Target Achievement
+# ---------------------------------------------------------------------------
+
+def plot_model_agreement(
+    risk_df: pd.DataFrame,
+    selected_facilities: Optional[list] = None,
+    output_dir: str = "figures",
+    show: bool = True,
+) -> str:
+    """Grouped bar chart showing per-model compliance probabilities per facility.
+
+    Args:
+        risk_df:              Output of ``compute_calibrated_probabilities``.
+        selected_facilities:  Facility IDs to compare (default: 5 representative).
+        output_dir:           Directory to save the figure.
+        show:                 Display inline if True.
+
+    Returns:
+        Saved file path.
+    """
+    _apply_style()
+
+    if selected_facilities is None:
+        selected_facilities = risk_df["Facility"].head(5).tolist()
+
+    prob_subset = risk_df[risk_df["Facility"].isin(selected_facilities)].reset_index(drop=True)
+    x     = np.arange(len(selected_facilities))
+    width = 0.2
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.bar(x - 1.5 * width, prob_subset["ProbMeetTargetNHITS"]    * 100, width,
+           label="N-HiTS",  color=MODEL_COLORS["N-HiTS"])
+    ax.bar(x - 0.5 * width, prob_subset["ProbMeetTargetXGBoost"]  * 100, width,
+           label="XGBoost", color=MODEL_COLORS["XGBoost"])
+    ax.bar(x + 0.5 * width, prob_subset["ProbMeetTargetBNN"]      * 100, width,
+           label="BNN",     color=MODEL_COLORS["BNN"])
+    ax.bar(x + 1.5 * width, prob_subset["ProbMeetTargetEnsemble"] * 100, width,
+           label="Ensemble",color=MODEL_COLORS["Ensemble"])
+
+    ax.axhline(y=50, color="black", linestyle="--", linewidth=1, alpha=0.6)
+    ax.set_ylabel("Probability of Meeting Target (%)", fontsize=12)
+    ax.set_title("Model Agreement on 2030 Target Achievement",
+                 fontsize=14, fontweight="bold")
+    ax.set_xticks(x)
+    ax.set_xticklabels(selected_facilities)
+    ax.legend()
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+
+    path = os.path.join(output_dir, "figure5_model_agreement.png")
+    _save(fig, path, show)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Stakeholder Dashboard (6-panel)
+# ---------------------------------------------------------------------------
+
+def plot_stakeholder_dashboard(
+    risk_df: pd.DataFrame,
+    comparison_df: pd.DataFrame,
+    output_dir: str = "figures",
+    show: bool = True,
+) -> str:
+    """Six-panel stakeholder summary dashboard.
+
+    Panels:
+        1. Risk level distribution (bar)
+        2. Model accuracy MAPE (bar)
+        3. Prediction interval coverage (bar)
+        4. Target achievement probability histogram
+        5. Predicted vs target emissions scatter
+        6. Emissions gap vs uncertainty scatter
+
+    Args:
+        risk_df:       Output of ``compute_calibrated_probabilities``.
+        comparison_df: Output of ``compare_model_metrics`` from evaluation.py.
+        output_dir:    Directory to save the figure.
+        show:          Display inline if True.
+
+    Returns:
+        Saved file path.
+    """
+    _apply_style()
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    fig.suptitle("ESG Emissions Forecast — Stakeholder Dashboard",
+                 fontsize=16, fontweight="bold")
+
+    # 1. Risk distribution
+    ax = axes[0, 0]
+    risk_counts = risk_df["RiskLevelEnsemble"].value_counts()
+    bar_colors  = [RISK_COLORS.get(x, "#bdc3c7") for x in risk_counts.index]
+    risk_counts.plot(kind="bar", ax=ax, color=bar_colors)
+    ax.set_title("Risk Level Distribution", fontweight="bold")
+    ax.set_ylabel("Number of Facilities")
+    ax.set_xlabel("")
+    ax.tick_params(axis="x", rotation=45)
+
+    # 2. Model MAPE comparison
+    ax = axes[0, 1]
+    if "MAPE" in comparison_df.columns:
+        comparison_df["MAPE"].plot(kind="bar", ax=ax, color="steelblue", legend=False)
+    ax.set_title("Model Accuracy (MAPE)", fontweight="bold")
+    ax.set_ylabel("MAPE (%)")
+    ax.axhline(y=10, color="green", linestyle="--", label="Target 10%")
+    ax.legend()
+    ax.tick_params(axis="x", rotation=45)
+
+    # 3. PI coverage
+    ax = axes[0, 2]
+    if "PICoverage90" in comparison_df.columns:
+        comparison_df["PICoverage90"].plot(kind="bar", ax=ax, color="coral", legend=False)
+    ax.set_title("Prediction Interval Coverage (90%)", fontweight="bold")
+    ax.set_ylabel("Coverage (%)")
+    ax.axhline(y=90, color="green", linestyle="--", label="Target 90%")
+    ax.legend()
+    ax.tick_params(axis="x", rotation=45)
+
+    # 4. Probability histogram
+    ax = axes[1, 0]
+    valid_probs = risk_df["ProbMeetTargetEnsemble"].dropna()
+    ax.hist(valid_probs, bins=20, color="skyblue", edgecolor="black")
+    ax.axvline(x=0.5, color="red", linestyle="--", label="50% threshold")
+    ax.set_title("Distribution of Target Achievement Probability", fontweight="bold")
+    ax.set_xlabel("Probability of Meeting Target")
+    ax.set_ylabel("Number of Facilities")
+    ax.legend()
+
+    # 5. Predicted vs target scatter
+    ax = axes[1, 1]
+    valid = risk_df.dropna(subset=["PredictionEnsemble", "Target2030", "UncertaintyEnsemble"])
+    sc = ax.scatter(
+        valid["Target2030"], valid["PredictionEnsemble"],
+        c=valid["UncertaintyEnsemble"], cmap="viridis", alpha=0.6, s=100,
+    )
+    min_val = min(valid["Target2030"].min(), valid["PredictionEnsemble"].min())
+    max_val = max(valid["Target2030"].max(), valid["PredictionEnsemble"].max())
+    ax.plot([min_val, max_val], [min_val, max_val], "r--", label="Perfect prediction")
+    ax.set_title("Predicted vs Target Emissions", fontweight="bold")
+    ax.set_xlabel("Target 2030 (tCO₂)")
+    ax.set_ylabel("Predicted 2030 (tCO₂)")
+    plt.colorbar(sc, ax=ax, label="Uncertainty")
+    ax.legend()
+
+    # 6. Gap vs uncertainty
+    ax = axes[1, 2]
+    risk_df_copy = risk_df.copy()
+    risk_df_copy["EmissionsGap"] = risk_df_copy["PredictionEnsemble"] - risk_df_copy["Target2030"]
+    valid2 = risk_df_copy.dropna(subset=["UncertaintyEnsemble", "EmissionsGap", "RiskLevelEnsemble"])
+    risk_colors_mapped = valid2["RiskLevelEnsemble"].map(RISK_COLORS).fillna("#bdc3c7")
+    ax.scatter(valid2["UncertaintyEnsemble"], valid2["EmissionsGap"],
+               c=risk_colors_mapped, alpha=0.6, s=100)
+    ax.axhline(y=0, color="black", linestyle="-", linewidth=0.5)
+    ax.set_title("Emissions Gap vs Uncertainty", fontweight="bold")
+    ax.set_xlabel("Prediction Uncertainty (std)")
+    ax.set_ylabel("Emissions Gap (Predicted − Target)")
+    legend_patches = [
+        mpatches.Patch(color=c, label=l)
+        for l, c in RISK_COLORS.items() if l != "Unknown"
+    ]
+    ax.legend(handles=legend_patches, loc="best", fontsize=8)
+
+    plt.tight_layout()
+    path = os.path.join(output_dir, "figure0_stakeholder_dashboard.png")
+    _save(fig, path, show)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Facility-level dot-and-whisker accuracy plot
+# ---------------------------------------------------------------------------
+
+def plot_facility_accuracy(
+    results_df: pd.DataFrame,
+    output_dir: str = "figures",
+    show: bool = True,
+) -> str:
+    """Dot-and-whisker chart showing per-facility MAPE for each model.
+
+    Args:
+        results_df: Per-facility results DataFrame with MAPE columns.
+        output_dir: Directory to save the figure.
+        show:       Display inline if True.
+
+    Returns:
+        Saved file path.
+    """
+    _apply_style()
+
+    model_map = {
+        "N-HiTS":  "NHITSMAPE",
+        "XGBoost": "XGBoostMAPE",
+        "BNN":     "BNNMAPE",
+    }
+    facilities = results_df["Facility"].tolist()
+    y_pos      = np.arange(len(facilities))
+
+    fig, ax = plt.subplots(figsize=(10, max(6, len(facilities) * 0.4)))
+
+    offsets = [-0.25, 0.0, 0.25]
+    for (model_name, col), offset in zip(model_map.items(), offsets):
+        if col not in results_df.columns:
+            continue
+        vals = results_df[col].values
+        ax.scatter(vals, y_pos + offset,
+                   label=model_name,
+                   color=MODEL_COLORS.get(model_name, "gray"),
+                   s=60, alpha=0.8, zorder=3)
+
+    ax.axvline(x=10, color="green", linestyle="--", linewidth=1, label="10% MAPE target")
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(facilities, fontsize=9)
+    ax.set_xlabel("MAPE (%)", fontsize=12)
+    ax.set_title("Per-Facility Forecast Accuracy by Model", fontsize=14, fontweight="bold")
+    ax.legend(loc="lower right")
+    ax.grid(axis="x", alpha=0.3)
+    plt.tight_layout()
+
+    path = os.path.join(output_dir, "figure6_facility_accuracy.png")
+    _save(fig, path, show)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Convenience: render all figures at once
+# ---------------------------------------------------------------------------
+
+def plot_all(
+    results_df: pd.DataFrame,
+    risk_df: pd.DataFrame,
+    comparison_df: pd.DataFrame,
+    shap_summary: pd.DataFrame,
+    output_dir: str = "figures",
+    show: bool = False,
+) -> list[str]:
+    """Render and save all six publication figures plus the dashboard.
+
+    Args:
+        results_df:    Per-facility model results.
+        risk_df:       Compliance probability DataFrame.
+        comparison_df: Model comparison summary.
+        shap_summary:  Aggregated SHAP importance table.
+        output_dir:    Directory for all saved figures.
+        show:          Display each figure inline if True.
+
+    Returns:
+        List of saved file paths.
+    """
+    paths = []
+    os.makedirs(output_dir, exist_ok=True)
+
+    paths.append(plot_stakeholder_dashboard(risk_df, comparison_df, output_dir, show))
+    paths.append(plot_mape_distribution(results_df, output_dir, show))
+    paths.append(plot_uncertainty_decomposition(risk_df, results_df, None, output_dir, show))
+
+    if shap_summary is not None and len(shap_summary) > 0:
+        paths.append(plot_shap_comparison(shap_summary, output_dir=output_dir, show=show))
+
+    paths.append(plot_probability_distribution(risk_df, output_dir, show))
+    paths.append(plot_model_agreement(risk_df, output_dir=output_dir, show=show))
+    paths.append(plot_facility_accuracy(results_df, output_dir, show))
+
+    logger.info("All figures saved to %s", output_dir)
+    return paths

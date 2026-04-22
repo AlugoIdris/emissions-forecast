@@ -1,0 +1,25 @@
+# Core data science
+numpy>=1.26,<2.0
+pandas>=2.0,<3.0
+scipy>=1.11
+
+# Machine learning
+scikit-learn>=1.4
+xgboost>=2.0
+
+# Deep learning
+torch>=2.1
+torchvision>=0.16
+
+# Time-series forecasting
+neuralforecast>=1.7
+
+# Explainability
+shap>=0.45
+
+# Visualisation
+matplotlib>=3.8
+seaborn>=0.13
+
+# Utilities
+tqdm>=4.66
