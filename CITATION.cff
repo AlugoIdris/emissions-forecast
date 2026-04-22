@@ -2,19 +2,18 @@ cff-version: 1.2.0
 message: "If you use this code, please cite the paper below."
 title: "Ensemble Forecasting of Industrial Facility Emissions Toward 2030 Targets"
 authors:
-  - family-names: "[Your Family Name]"
-    given-names: "[Your Given Name]"
-    orcid: "https://orcid.org/[YOUR-ORCID]"
-version: "1.0.0"
-date-released: "2026-04-21"
+  - family-names: "Alugo"
+    given-names: "Idris"
+version: "1.0.1"
+date-released: "2026-04-23"
 license: MIT
-repository-code: "https://github.com/[your-username]/emissions-forecast"
+repository-code: "https://github.com/AlugoIdris/emissions-forecast"
 doi: "[to be assigned by Zenodo]"
 preferred-citation:
   type: article
   authors:
-    - family-names: "[Your Family Name]"
-      given-names: "[Your Given Name]"
+    - family-names: "Alugo"
+      given-names: "Idris"
   title: "Ensemble Forecasting of Industrial Facility Emissions Toward 2030 Targets"
   journal: "Applied Energy"
   year: 2026

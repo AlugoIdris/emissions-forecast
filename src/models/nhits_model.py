@@ -36,7 +36,7 @@ from neuralforecast import NeuralForecast
 from neuralforecast.models import NHITS
 from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error
 
-from config import NHITS_CONFIG, SHAP_CONFIG, TARGET_COL, TEST_MONTHS, RANDOM_SEED, MIN_TRAIN_ROWS
+from config import NHITS_CONFIG, SHAP_CONFIG, TARGET_COL, TEST_MONTHS, RANDOM_SEED, MIN_TRAIN_ROWS, MIN_TEST_ROWS
 from src.metrics import safe_mape
 
 logger = logging.getLogger(__name__)
@@ -130,12 +130,20 @@ def run_nhits(
         split_idx = len(df_nhits) - test_months
         train_df  = df_nhits.iloc[:split_idx]
         test_df   = df_nhits.iloc[split_idx:]
+        input_size = _adaptive_input_size(len(train_df))
+        min_train_required = max(cfg.input_size_min, input_size)
 
-        if len(train_df) < 12 or len(test_df) < 3:
-            logger.warning("N-HiTS: train/test split too small for %s.", facility)
+        if len(train_df) < min_train_required or len(test_df) < MIN_TEST_ROWS:
+            logger.warning(
+                "N-HiTS: train/test split too small for %s (train=%d, test=%d, required_train=%d, required_test=%d).",
+                facility,
+                len(train_df),
+                len(test_df),
+                min_train_required,
+                MIN_TEST_ROWS,
+            )
             return {"facility": facility, "mape": np.nan, "rmse": np.nan, "model": None}
 
-        input_size = _adaptive_input_size(len(train_df))
         horizon    = min(12, test_months)
 
         model = NHITS(
