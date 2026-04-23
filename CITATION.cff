@@ -1,10 +1,10 @@
-cff-version: 1.2.0
+﻿cff-version: 1.2.0
 message: "If you use this code, please cite the paper below."
 title: "Ensemble Forecasting of Industrial Facility Emissions Toward 2030 Targets"
 authors:
   - family-names: "Alugo"
     given-names: "Idris"
-version: "1.0.1"
+version: "1.0.2"
 date-released: "2026-04-23"
 license: MIT
 repository-code: "https://github.com/AlugoIdris/emissions-forecast"
