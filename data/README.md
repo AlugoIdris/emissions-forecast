@@ -103,11 +103,11 @@ are dropped before each model's training split.
 If you use the synthetic sample or the preprocessing pipeline, please cite:
 
 ```bibtex
-@article{[yourlastname]2026ensemble,
-  title   = {Ensemble Forecasting of Industrial Facility Emissions Toward 2030 Targets},
-  author  = {[Your Name]},
+@article{alugo2026ensemble,
+  title   = {Long-Horizon Emissions Forecasting for 2030 Target Assessment: A Comparative Study of N-HiTS, XGBoost, and Bayesian Models in Fast-Moving Consumer Goods Supply Chains},
+  author  = {Idris Alugo},
   journal = {Applied Energy},
   year    = {2026},
-  doi     = {[TO-BE-ASSIGNED]}
+  doi     = {10.5281/zenodo.19755807}
 }
 ```

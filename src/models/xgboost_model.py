@@ -6,9 +6,10 @@ XGBoost quantile regression model for per-facility emissions forecasting.
 Trains three quantile models (Q10, Q50, Q90) per facility, returns
 predictions, metrics, and SHAP values.
 
-Authors : [Your Name]
-Paper   : "Ensemble Forecasting of Industrial Facility Emissions
-           Toward 2030 Targets" – Applied Energy (submitted 2026)
+Authors : Idris Alugo
+Paper   : "Long-Horizon Emissions Forecasting for 2030 Target Assessment:
+           A Comparative Study of N-HiTS, XGBoost, and Bayesian Models
+           in Fast-Moving Consumer Goods Supply Chains" – Applied Energy (2026)
 License : MIT
 """
 

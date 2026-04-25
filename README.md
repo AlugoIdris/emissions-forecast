@@ -1,6 +1,6 @@
 # Long-Horizon Emissions Forecasting for 2030 Target Assessment: A Comparative Study of N-HiTS, XGBoost, and Bayesian Models in Fast-Moving Consumer Goods Supply Chains
 
-[![DOI](https://zenodo.org/badge/DOI/[TO-BE-ASSIGNED].svg)](https://doi.org/[TO-BE-ASSIGNED])
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19755807.svg)](https://doi.org/10.5281/zenodo.19755807)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 Code and data supplement for the *Applied Energy* paper:
@@ -72,12 +72,12 @@ The notebook `01_run_pipeline.ipynb` reproduces all figures and result CSVs.
 ## Citation
 
 ```bibtex
-@article{[yourlastname]2026ensemble,
+@article{alugo2026ensemble,
   title   = {Long-Horizon Emissions Forecasting for 2030 Target Assessment: A Comparative Study of N-HiTS, XGBoost, and Bayesian Models in Fast-Moving Consumer Goods Supply Chains},
-  author  = {[Your Name]},
+  author  = {Idris Alugo},
   journal = {Applied Energy},
   year    = {2026},
-  doi     = {[TO-BE-ASSIGNED]}
+  doi     = {10.5281/zenodo.19755807}
 }
 ```
 
@@ -85,4 +85,4 @@ The notebook `01_run_pipeline.ipynb` reproduces all figures and result CSVs.
 
 ## License
 
-MIT © [Your Name]
+MIT © Idris Alugo

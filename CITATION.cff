@@ -1,6 +1,6 @@
 ﻿cff-version: 1.2.0
 message: "If you use this code, please cite the paper below."
-title: "Ensemble Forecasting of Industrial Facility Emissions Toward 2030 Targets"
+title: "Long-Horizon Emissions Forecasting for 2030 Target Assessment: A Comparative Study of N-HiTS, XGBoost, and Bayesian Models in Fast-Moving Consumer Goods Supply Chains"
 authors:
   - family-names: "Alugo"
     given-names: "Idris"
@@ -8,13 +8,13 @@ version: "1.0.2"
 date-released: "2026-04-23"
 license: MIT
 repository-code: "https://github.com/AlugoIdris/emissions-forecast"
-doi: "[to be assigned by Zenodo]"
+doi: "10.5281/zenodo.19755807"
 preferred-citation:
   type: article
   authors:
     - family-names: "Alugo"
       given-names: "Idris"
-  title: "Ensemble Forecasting of Industrial Facility Emissions Toward 2030 Targets"
+  title: "Long-Horizon Emissions Forecasting for 2030 Target Assessment: A Comparative Study of N-HiTS, XGBoost, and Bayesian Models in Fast-Moving Consumer Goods Supply Chains"
   journal: "Applied Energy"
   year: 2026
   doi: "[journal DOI]"
