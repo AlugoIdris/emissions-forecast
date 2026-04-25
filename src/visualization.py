@@ -595,10 +595,24 @@ def plot_facility_clusters(
     ax1.legend()
     ax1.grid(alpha=0.3)
 
-    # Panel 2 — PCA scatter coloured by cluster
-    for k_idx, grp in cluster_df.groupby("Cluster"):
-        color = cluster_palette[int(k_idx) % len(cluster_palette)]
-        ax2.scatter(grp["PC1"], grp["PC2"], label=f"Cluster {k_idx}",
+    # Panel 2 — PCA scatter coloured by semantic label
+    # Use fixed colours for semantic cluster names; fall back to palette for numeric IDs
+    semantic_colors = {
+        "Low Emitter":    "#2ca02c",   # green
+        "Medium Emitter": "#ff7f0e",   # orange
+        "High Emitter":   "#d62728",   # red
+    }
+    label_order = (
+        ["Low Emitter", "Medium Emitter", "High Emitter"]
+        if set(cluster_df["Cluster"].unique()).issubset(semantic_colors)
+        else sorted(cluster_df["Cluster"].unique())
+    )
+    for i, label in enumerate(label_order):
+        grp = cluster_df[cluster_df["Cluster"] == label]
+        if grp.empty:
+            continue
+        color = semantic_colors.get(label, cluster_palette[i % len(cluster_palette)])
+        ax2.scatter(grp["PC1"], grp["PC2"], label=label,
                     color=color, s=80, alpha=0.85, zorder=3)
         for _, row in grp.iterrows():
             ax2.annotate(
