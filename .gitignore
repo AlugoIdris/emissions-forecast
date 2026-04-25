@@ -1,11 +1,12 @@
 # ── Data ────────────────────────────────────────────────────────────────────
-data/
-*.csv
+# Raw / large data files are excluded, but the anonymised dataset is tracked
 *.xlsx
 *.parquet
 *.feather
 *.h5
 *.hdf5
+# Allow the anonymised input dataset
+!data/esgdata.csv
 
 # ── Figures & results (auto-generated) ──────────────────────────────────────
 figures/
