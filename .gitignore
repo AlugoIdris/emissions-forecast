@@ -9,9 +9,8 @@
 !data/esgdata.csv
 
 # ── Figures & results (auto-generated) ──────────────────────────────────────
-figures/
+# figures/ is tracked so publication figures are available in the repo
 results/
-*.png
 *.jpg
 *.jpeg
 *.pdf

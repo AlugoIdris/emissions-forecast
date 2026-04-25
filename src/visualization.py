@@ -547,6 +547,81 @@ def plot_facility_accuracy(
 
 
 # ---------------------------------------------------------------------------
+# Figure 7 — Facility K-Means Clustering (Silhouette + PCA scatter)
+# ---------------------------------------------------------------------------
+
+def plot_facility_clusters(
+    cluster_df: pd.DataFrame,
+    sil_scores: dict,
+    best_k: int,
+    output_dir: str = "figures",
+    show: bool = True,
+) -> str:
+    """Two-panel figure: silhouette-score elbow and PCA cluster scatter.
+
+    Args:
+        cluster_df:  DataFrame with columns ``Facility``, ``Cluster``,
+                     ``PC1``, ``PC2``.
+        sil_scores:  Mapping of ``{k: silhouette_score}`` for K sweep.
+        best_k:      The K selected as optimal.
+        output_dir:  Directory to save the figure.
+        show:        Display inline if True.
+
+    Returns:
+        Saved file path.
+    """
+    _apply_style()
+
+    cluster_palette = [
+        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
+        "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+    ]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    fig.suptitle("Facility Emissions Profile Clustering (K-Means)",
+                 fontsize=14, fontweight="bold")
+
+    # Panel 1 — Silhouette score vs K
+    ks     = sorted(sil_scores.keys())
+    scores = [sil_scores[k] for k in ks]
+    ax1.plot(ks, scores, marker="o", linewidth=2, color="#1f77b4")
+    ax1.axvline(x=best_k, color="red", linestyle="--",
+                linewidth=1.5, label=f"Best K={best_k}")
+    ax1.scatter([best_k], [sil_scores[best_k]], color="red", zorder=5, s=100)
+    ax1.set_xlabel("Number of Clusters (K)", fontsize=12)
+    ax1.set_ylabel("Silhouette Score", fontsize=12)
+    ax1.set_title("Silhouette Score vs K", fontweight="bold")
+    ax1.set_xticks(ks)
+    ax1.legend()
+    ax1.grid(alpha=0.3)
+
+    # Panel 2 — PCA scatter coloured by cluster
+    for k_idx, grp in cluster_df.groupby("Cluster"):
+        color = cluster_palette[int(k_idx) % len(cluster_palette)]
+        ax2.scatter(grp["PC1"], grp["PC2"], label=f"Cluster {k_idx}",
+                    color=color, s=80, alpha=0.85, zorder=3)
+        for _, row in grp.iterrows():
+            ax2.annotate(
+                row["Facility"],
+                (row["PC1"], row["PC2"]),
+                fontsize=7, alpha=0.75,
+                xytext=(3, 3), textcoords="offset points",
+            )
+
+    ax2.set_xlabel("Principal Component 1", fontsize=12)
+    ax2.set_ylabel("Principal Component 2", fontsize=12)
+    ax2.set_title(f"Facility Clusters (K={best_k}) — PCA Projection",
+                  fontweight="bold")
+    ax2.legend(loc="best", fontsize=9)
+    ax2.grid(alpha=0.3)
+
+    plt.tight_layout()
+    path = os.path.join(output_dir, "figure7_facility_clusters.png")
+    _save(fig, path, show)
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Convenience: render all figures at once
 # ---------------------------------------------------------------------------
 
