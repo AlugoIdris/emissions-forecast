@@ -39,12 +39,12 @@ RANDOM_SEED = 42
 # ---------------------------------------------------------------------------
 
 DATE_MIN_YEAR = 2016          # removes 2015 baseline year
-DATE_MAX_YEAR = 2023          # last year of observed data
+DATE_MAX_YEAR = 2024          # last year of observed data (test period = 2024)
 
 LAG_PERIODS   = [1, 3, 6, 12] # months
 
 OUTLIER_FACILITIES = [
-    "F1",  "F5",  "F8",  "F3",  "F14", "F15", "F16", "F20",
+    "F1", "F2",  "F5",  "F8",  "F3",  "F14", "F15", "F16", "F20",
     "F21", "F23", "F24", "F26", "F29", "F32", "F34", "F35",
     "F36", "F37", "F38", "F39", "F40", "F41", "F42", "F45",
     "F46", "F48",
@@ -77,7 +77,7 @@ MIN_TEST_ROWS  = 3    # minimum test rows required
 # Target / Risk Analysis
 # ---------------------------------------------------------------------------
 
-BASELINE_YEAR      = 2022
+BASELINE_YEAR      = 2023
 TARGET_YEAR        = 2030
 TARGET_REDUCTION   = 0.10    # 10 % reduction from baseline
 TARGET_REDUCTION_RATE = TARGET_REDUCTION  # alias for backward compatibility

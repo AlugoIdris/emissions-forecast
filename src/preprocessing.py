@@ -29,14 +29,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 OUTLIER_FACILITIES = [
-    "F1", "F5", "F8", "F29", "F34", "F15", "F26", "F3", "F20",
+    "F1", "F2", "F5", "F8", "F29", "F34", "F15", "F26", "F3", "F20",
     "F14", "F21", "F24", "F35", "F39", "F16", "F23", "F32",
     "F45", "F46", "F48", "F42", "F40", "F41", "F38", "F37", "F36",
 ]
 
 LAG_PERIODS   = [1, 3, 6, 12]
 DATE_MIN_YEAR = 2016          # inclusive (removes 2015 baseline)
-DATE_MAX_YEAR = 2023          # inclusive
+DATE_MAX_YEAR = 2024          # inclusive (test period = 2024, train = 2022–2023)
 
 
 # ---------------------------------------------------------------------------

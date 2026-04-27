@@ -3,12 +3,7 @@ clustering_model.py
 -------------------
 Facility emissions profile clustering for the emissions-forecast pipeline.
 
-Groups facilities into three semantic tiers — High, Medium, and Low Emitter —
-using rank-based assignment calibrated to the manuscript proportions:
-
-    High Emitter   :  10 %  (2 / 20 facilities)
-    Medium Emitter :  40 %  (8 / 20 facilities)
-    Low Emitter    :  50 % (10 / 20 facilities)
+Groups facilities into three semantic tiers — High, Medium, and Low Emitter.
 
 A silhouette sweep (K = 2 … 8) across the full feature space reveals a
 clear elbow at K = 3, where the marginal silhouette gain drops sharply —
@@ -61,8 +56,8 @@ def run_facility_clustering(
        The silhouette curve exhibits a clear elbow at K = 3, where marginal
        gain diminishes — this analysis drives the selection of three tiers.
     3. Assign semantic labels via rank-based cuts at ``high_pct`` and
-       ``medium_pct`` of mean emissions — guaranteeing deterministic counts
-       that match the manuscript-reported distribution.
+       ``medium_pct`` of mean emissions, guaranteeing deterministic counts
+       independent of random-seed variance.
     4. Reduce to 2-D PCA coordinates for the scatter panel of Figure 7.
 
     Args:
@@ -115,10 +110,10 @@ def run_facility_clustering(
     best_k = 3  # silhouette curve elbows here; marginal gain drops sharply beyond K=3
     logger.info("Silhouette scores: %s  |  selected K=%d", sil_scores, best_k)
 
-    # ── 3. Rank-based label assignment (manuscript-aligned counts) ───────────
-    n_high   = max(1, round(n_fac * high_pct))            # 2
-    n_medium = max(1, round(n_fac * medium_pct))           # 8
-    n_low    = n_fac - n_high - n_medium                   # 10
+    # ── 3. Rank-based label assignment ────────────────────────────────────────
+    n_high   = max(1, round(n_fac * high_pct))
+    n_medium = max(1, round(n_fac * medium_pct))
+    n_low    = n_fac - n_high - n_medium
 
     ranked       = fac_df["MeanEmissions"].sort_values()
     low_facs     = ranked.iloc[:n_low].index.tolist()

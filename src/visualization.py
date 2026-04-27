@@ -636,6 +636,172 @@ def plot_facility_clusters(
 
 
 # ---------------------------------------------------------------------------
+# Figure 9 — SHAP Dependence Plots (3 features × 3 models)
+# ---------------------------------------------------------------------------
+
+def plot_shap_dependence(
+    shap_raw: dict,
+    X_raw: dict,
+    features_of_interest: list[str] | None = None,
+    output_dir: str = "figures",
+    show: bool = True,
+) -> str:
+    """3×3 SHAP dependence plots for three key features across three models.
+
+    Args:
+        shap_raw: dict mapping model key (``"nhits"``, ``"xgb"``, ``"bnn"``)
+                  to a DataFrame with columns ``[Facility, feat1, feat2, ...]``.
+        X_raw:    dict with the same keys, same shape — actual feature values
+                  corresponding to the SHAP values.
+        features_of_interest: list of exactly 3 feature names to plot.
+                  Defaults to ``["Energy_MWh", "Production", "EmissionsLag1"]``.
+        output_dir: Directory to save the figure.
+        show:       Display inline if True.
+
+    Returns:
+        Saved file path.
+    """
+    if features_of_interest is None:
+        features_of_interest = ["Energy_MWh", "Production", "EmissionsLag1", "EmissionsLag3"]
+
+    _apply_style()
+
+    model_keys   = ["nhits",  "xgb",     "bnn"]
+    model_labels = ["N-HiTS", "XGBoost", "BNN"]
+    model_colors = ["#1f77b4", "#ff7f0e", "#2ca02c"]
+
+    color_feature = features_of_interest[3]  # EmissionsLag3 used for colouring
+
+    n_feat = len(features_of_interest)
+    fig, axes = plt.subplots(
+        nrows=len(model_keys),
+        ncols=n_feat,
+        figsize=(4.5 * n_feat, 11),
+        sharex="col",
+    )
+
+    for row, (mk, ml, mc) in enumerate(zip(model_keys, model_labels, model_colors)):
+        shap_df = shap_raw.get(mk)
+        x_df    = X_raw.get(mk)
+
+        if shap_df is None or x_df is None or shap_df.empty:
+            for col in range(len(features_of_interest)):
+                axes[row, col].set_visible(False)
+            continue
+
+        # colour by EmissionsLag1 value (normalised)
+        c_vals = x_df[color_feature].values if color_feature in x_df.columns else None
+
+        for col, feat in enumerate(features_of_interest):
+            ax = axes[row, col]
+
+            if feat not in shap_df.columns or feat not in x_df.columns:
+                ax.set_visible(False)
+                continue
+
+            x_feat   = x_df[feat].values
+            shap_val = shap_df[feat].values
+
+            sc = ax.scatter(
+                x_feat, shap_val,
+                c=c_vals,
+                cmap="coolwarm",
+                alpha=0.6,
+                s=20,
+                linewidths=0,
+            )
+
+            ax.axhline(0, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
+
+            if col == 0:
+                ax.set_ylabel(f"{ml}\nSHAP value", fontsize=10)
+            if row == 0:
+                ax.set_title(feat.replace("_", " "), fontsize=11, fontweight="bold")
+            if row == len(model_keys) - 1:
+                ax.set_xlabel(feat.replace("_", " "), fontsize=10)
+
+            ax.grid(alpha=0.3)
+
+        # colorbar on the rightmost column of each row
+        cbar = fig.colorbar(sc, ax=axes[row, :], fraction=0.015, pad=0.02)
+        cbar.set_label(color_feature.replace("_", " "), fontsize=8)
+
+    fig.suptitle(
+        "SHAP Dependence Plots — Effect of Operational Features on Emissions Forecast",
+        fontsize=13, fontweight="bold", y=1.01,
+    )
+    plt.tight_layout()
+
+    path = os.path.join(output_dir, "figure9_shap_dependence.png")
+    _save(fig, path, show)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Figure 10 — Variance Decomposition (all facilities)
+# ---------------------------------------------------------------------------
+
+def plot_variance_decomposition(
+    decomp_df: pd.DataFrame,
+    output_dir: str = "figures",
+    show: bool = True,
+) -> str:
+    """Two-panel figure: absolute variance (top) and % share (bottom) per facility.
+
+    Args:
+        decomp_df:  DataFrame with columns
+                    ``Facility, within_model_var, between_model_var,
+                    total_var, within_pct, between_pct``.
+                    (Output of the uncertainty decomposition calculation.)
+        output_dir: Directory to save the figure.
+        show:       Display inline if True.
+
+    Returns:
+        Saved file path.
+    """
+    _apply_style()
+
+    df = decomp_df.copy().sort_values("between_pct", ascending=False).reset_index(drop=True)
+    x  = np.arange(len(df))
+    w  = 0.6
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True,
+                                   gridspec_kw={"height_ratios": [1.4, 1]})
+
+    # ── Panel 1: absolute variance ──────────────────────────────────────────
+    ax1.bar(x, df["within_model_var"],  w, label="Within-model (aleatoric)",
+            color="#1f77b4", alpha=0.85)
+    ax1.bar(x, df["between_model_var"], w, bottom=df["within_model_var"],
+            label="Between-model (epistemic)", color="#ff7f0e", alpha=0.85)
+    ax1.set_ylabel("Variance (tCO2)^2", fontsize=11)
+    ax1.set_title(
+        "Ensemble Uncertainty Decomposition — All Facilities\n"
+        "(sorted by epistemic share, high → low)",
+        fontsize=13, fontweight="bold",
+    )
+    ax1.legend(fontsize=10)
+    ax1.grid(axis="y", alpha=0.3)
+
+    # ── Panel 2: percentage stacked bar ────────────────────────────────────
+    ax2.bar(x, df["within_pct"],  w, label="Within-model %",  color="#1f77b4", alpha=0.85)
+    ax2.bar(x, df["between_pct"], w, bottom=df["within_pct"],
+            label="Between-model %", color="#ff7f0e", alpha=0.85)
+    ax2.axhline(50, color="black", linestyle="--", linewidth=1, alpha=0.6)
+    ax2.set_ylim(0, 100)
+    ax2.set_ylabel("Share (%)", fontsize=11)
+    ax2.set_xlabel("Facility", fontsize=11)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(df["Facility"], rotation=45, ha="right", fontsize=9)
+    ax2.legend(fontsize=10, loc="upper right")
+    ax2.grid(axis="y", alpha=0.3)
+
+    plt.tight_layout()
+    path = os.path.join(output_dir, "figure10_variance_decomposition.png")
+    _save(fig, path, show)
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Convenience: render all figures at once
 # ---------------------------------------------------------------------------
 
@@ -646,8 +812,11 @@ def plot_all(
     shap_summary: pd.DataFrame,
     output_dir: str = "figures",
     show: bool = False,
+    shap_raw: dict | None = None,
+    X_raw: dict | None = None,
+    decomp_df: pd.DataFrame | None = None,
 ) -> list[str]:
-    """Render and save all six publication figures plus the dashboard.
+    """Render and save all publication figures plus the dashboard.
 
     Args:
         results_df:    Per-facility model results.
@@ -656,6 +825,13 @@ def plot_all(
         shap_summary:  Aggregated SHAP importance table.
         output_dir:    Directory for all saved figures.
         show:          Display each figure inline if True.
+        shap_raw:      Raw SHAP value DataFrames keyed by model
+                       (``"nhits"``, ``"xgb"``, ``"bnn"``).  When provided,
+                       Figure 9 (dependence plots) is also generated.
+        X_raw:         Corresponding feature value DataFrames (same keys).
+        decomp_df:     Uncertainty variance decomposition DataFrame (output of
+                       the Eq. 8 computation).  When provided, Figure 10 is
+                       generated.
 
     Returns:
         List of saved file paths.
@@ -673,6 +849,12 @@ def plot_all(
     paths.append(plot_probability_distribution(risk_df, output_dir, show))
     paths.append(plot_model_agreement(risk_df, output_dir=output_dir, show=show))
     paths.append(plot_facility_accuracy(results_df, output_dir, show))
+
+    if shap_raw is not None and X_raw is not None:
+        paths.append(plot_shap_dependence(shap_raw, X_raw, output_dir=output_dir, show=show))
+
+    if decomp_df is not None and len(decomp_df) > 0:
+        paths.append(plot_variance_decomposition(decomp_df, output_dir=output_dir, show=show))
 
     logger.info("All figures saved to %s", output_dir)
     return paths
