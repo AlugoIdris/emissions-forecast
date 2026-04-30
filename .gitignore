@@ -13,11 +13,14 @@ notes/
 
 # ── Figures & results (auto-generated) ──────────────────────────────────────
 # figures/ is tracked so publication figures are available in the repo
+# results/ is auto-generated — not tracked
 results/
 *.jpg
 *.jpeg
 *.pdf
 *.svg
+# Allow publication PDFs inside figures/ (Elsevier vector submission)
+!figures/*.pdf
 
 # ── Python ──────────────────────────────────────────────────────────────────
 __pycache__/
