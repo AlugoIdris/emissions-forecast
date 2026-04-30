@@ -808,6 +808,127 @@ def plot_variance_decomposition(
 
 
 # ---------------------------------------------------------------------------
+# Figure 11 – Horizon crossover projection
+# ---------------------------------------------------------------------------
+
+def plot_horizon_crossover(
+    horizon_summary: pd.DataFrame,
+    output_dir: str = "figures",
+    show: bool = False,
+) -> str:
+    """Plot observed per-step MAPE for XGBoost and N-HiTS with linear
+    extrapolation to their projected crossover horizon.
+
+    The chart visualises the key finding that XGBoost starts lower but
+    degrades faster, while N-HiTS starts higher but has a shallower slope,
+    with both trends intersecting at the projected crossover horizon h*.
+
+    Args:
+        horizon_summary: DataFrame with columns [Model, h, MAPE] —
+                         mean MAPE per model per step (e.g. from
+                         ``results/horizon_summary.csv``).
+        output_dir:      Directory for the saved figure.
+        show:            Display the figure inline if True.
+
+    Returns:
+        Path to the saved PNG file.
+    """
+    _apply_style()
+
+    models = ["XGBoost", "N-HiTS"]
+    colors = {m: MODEL_COLORS[m] for m in models}
+
+    # ── Fit linear trends over observed range h = 1…20 ──────────────────
+    fits = {}
+    for m in models:
+        sub = horizon_summary[horizon_summary["Model"] == m].sort_values("h")
+        coef = np.polyfit(sub["h"], sub["MAPE"], 1)   # [slope, intercept]
+        fits[m] = coef
+
+    # ── Crossover: XGBoost(h) == N-HiTS(h) ──────────────────────────────
+    sx, ix = fits["XGBoost"]
+    sn, in_ = fits["N-HiTS"]
+    h_cross = (in_ - ix) / (sx - sn)
+    mape_cross = ix + sx * h_cross
+
+    # ── Plot range: 1 to crossover + 15 months ──────────────────────────
+    h_obs = np.arange(1, 21)
+    h_ext = np.linspace(1, h_cross + 15, 300)
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    for m in models:
+        sub = horizon_summary[horizon_summary["Model"] == m].sort_values("h")
+        slope, intercept = fits[m]
+
+        # Observed scatter + connecting line
+        ax.plot(sub["h"], sub["MAPE"],
+                color=colors[m], linewidth=1.8, zorder=3)
+        ax.scatter(sub["h"], sub["MAPE"],
+                   color=colors[m], s=35, zorder=4)
+
+        # Extrapolated trend (full range, dashed)
+        ax.plot(h_ext, slope * h_ext + intercept,
+                color=colors[m], linewidth=1.4, linestyle="--", alpha=0.65,
+                label=f"{m}  (slope {slope:+.2f} pp/month)")
+
+    # ── Observed-data boundary marker ────────────────────────────────────
+    ax.axvline(20, color="grey", linestyle=":", linewidth=1.2, alpha=0.7)
+    ax.text(20.4, ax.get_ylim()[0] + 2, "Observed\nlimit (h=20)",
+            fontsize=8.5, color="grey", va="bottom")
+
+    # ── Crossover annotation ──────────────────────────────────────────────
+    ax.axvline(h_cross, color="#c0392b", linestyle="--", linewidth=1.5, alpha=0.8)
+    ax.scatter([h_cross], [mape_cross],
+               color="#c0392b", s=90, zorder=5, marker="*")
+    ax.annotate(
+        f"Crossover\nh* ≈ {h_cross:.0f} months\n({h_cross/12:.1f} yrs)\nMAPE ≈ {mape_cross:.0f}%",
+        xy=(h_cross, mape_cross),
+        xytext=(h_cross + 4, mape_cross + 8),
+        fontsize=9,
+        color="#c0392b",
+        arrowprops=dict(arrowstyle="->", color="#c0392b", lw=1.2),
+    )
+
+    # ── Region shading: XGBoost advantaged / N-HiTS advantaged ──────────
+    h_fill_obs  = h_obs[h_obs <= h_cross]
+    h_fill_ext  = h_ext[h_ext > h_cross]
+
+    ax.fill_between(
+        np.concatenate([h_fill_obs, h_fill_ext[:1]]),
+        np.polyval(fits["XGBoost"], np.concatenate([h_fill_obs, h_fill_ext[:1]])),
+        np.polyval(fits["N-HiTS"],  np.concatenate([h_fill_obs, h_fill_ext[:1]])),
+        alpha=0.06, color=colors["XGBoost"],
+        label="XGBoost advantage zone",
+    )
+    ax.fill_between(
+        h_fill_ext,
+        np.polyval(fits["XGBoost"], h_fill_ext),
+        np.polyval(fits["N-HiTS"],  h_fill_ext),
+        alpha=0.06, color=colors["N-HiTS"],
+        label="N-HiTS advantage zone",
+    )
+
+    ax.set_xlabel("Forecast horizon h (months)")
+    ax.set_ylabel(r"Mean MAPE (%)")
+    ax.set_title(
+        "Projected Crossover: XGBoost vs N-HiTS Degradation Slopes",
+        fontsize=13, pad=12,
+    )
+
+    # Force y-axis to start at 0
+    ax.set_ylim(bottom=0)
+    ax.set_xlim(left=1)
+    ax.legend(fontsize=9, loc="upper left", framealpha=0.85)
+    ax.grid(axis="both", alpha=0.3)
+
+    plt.tight_layout()
+    path = os.path.join(output_dir, "figure11_horizon_crossover.png")
+    _save(fig, path, show)
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Convenience: render all figures at once
 # ---------------------------------------------------------------------------
 
@@ -821,23 +942,27 @@ def plot_all(
     shap_raw: dict | None = None,
     X_raw: dict | None = None,
     decomp_df: pd.DataFrame | None = None,
+    horizon_summary: pd.DataFrame | None = None,
 ) -> list[str]:
     """Render and save all publication figures plus the dashboard.
 
     Args:
-        results_df:    Per-facility model results.
-        risk_df:       Compliance probability DataFrame.
-        comparison_df: Model comparison summary.
-        shap_summary:  Aggregated SHAP importance table.
-        output_dir:    Directory for all saved figures.
-        show:          Display each figure inline if True.
-        shap_raw:      Raw SHAP value DataFrames keyed by model
-                       (``"nhits"``, ``"xgb"``, ``"bnn"``).  When provided,
-                       Figure 9 (dependence plots) is also generated.
-        X_raw:         Corresponding feature value DataFrames (same keys).
-        decomp_df:     Uncertainty variance decomposition DataFrame (output of
-                       the Eq. 8 computation).  When provided, Figure 10 is
-                       generated.
+        results_df:       Per-facility model results.
+        risk_df:          Compliance probability DataFrame.
+        comparison_df:    Model comparison summary.
+        shap_summary:     Aggregated SHAP importance table.
+        output_dir:       Directory for all saved figures.
+        show:             Display each figure inline if True.
+        shap_raw:         Raw SHAP value DataFrames keyed by model
+                          (``"nhits"``, ``"xgb"``, ``"bnn"``).  When provided,
+                          Figure 9 (dependence plots) is also generated.
+        X_raw:            Corresponding feature value DataFrames (same keys).
+        decomp_df:        Uncertainty variance decomposition DataFrame (output
+                          of the Eq. 8 computation).  When provided, Figure 10
+                          is generated.
+        horizon_summary:  Per-model, per-step mean MAPE DataFrame with columns
+                          [Model, h, MAPE].  When provided, Figure 11
+                          (crossover projection) is generated.
 
     Returns:
         List of saved file paths.
@@ -861,6 +986,9 @@ def plot_all(
 
     if decomp_df is not None and len(decomp_df) > 0:
         paths.append(plot_variance_decomposition(decomp_df, output_dir=output_dir, show=show))
+
+    if horizon_summary is not None and len(horizon_summary) > 0:
+        paths.append(plot_horizon_crossover(horizon_summary, output_dir=output_dir, show=show))
 
     logger.info("All figures saved to %s", output_dir)
     return paths
