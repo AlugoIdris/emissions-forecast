@@ -55,6 +55,7 @@ MODEL_COLORS = {
 def _apply_style() -> None:
     sns.set_style("whitegrid")
     plt.rcParams.update({
+        "font.family":      "DejaVu Sans",
         "font.size":        11,
         "axes.labelsize":   12,
         "axes.titlesize":   14,
@@ -66,8 +67,13 @@ def _apply_style() -> None:
 
 def _save(fig: plt.Figure, path: str, show: bool) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    # PNG at 300 dpi (Elsevier minimum for raster figures)
     fig.savefig(path, dpi=300, bbox_inches="tight")
     logger.info("Saved: %s", path)
+    # PDF (vector) alongside every PNG — preferred format for Elsevier submission
+    pdf_path = os.path.splitext(path)[0] + ".pdf"
+    fig.savefig(pdf_path, bbox_inches="tight")
+    logger.info("Saved: %s", pdf_path)
     if show:
         plt.show()
     plt.close(fig)
@@ -209,7 +215,7 @@ def plot_uncertainty_decomposition(
     ax.plot(x, decomp_df["Total"], marker="o", color="red", linewidth=2,
             markersize=8, label="Total Uncertainty")
 
-    ax.set_ylabel("Uncertainty (tCO₂)", fontsize=12)
+    ax.set_ylabel(r"Uncertainty (tCO$_2$)", fontsize=12)
     ax.set_xlabel("Facility", fontsize=12)
     ax.set_title("Ensemble Uncertainty Decomposition — Selected Facilities",
                  fontsize=14, fontweight="bold")
@@ -462,8 +468,8 @@ def plot_stakeholder_dashboard(
     max_val = max(valid["Target2030"].max(), valid["PredictionEnsemble"].max())
     ax.plot([min_val, max_val], [min_val, max_val], "r--", label="Perfect prediction")
     ax.set_title("Predicted vs Target Emissions", fontweight="bold")
-    ax.set_xlabel("Target 2030 (tCO₂)")
-    ax.set_ylabel("Predicted 2030 (tCO₂)")
+    ax.set_xlabel(r"Target 2030 (tCO$_2$)")
+    ax.set_ylabel(r"Predicted 2030 (tCO$_2$)")
     plt.colorbar(sc, ax=ax, label="Uncertainty")
     ax.legend()
 
