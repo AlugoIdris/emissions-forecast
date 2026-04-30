@@ -689,3 +689,483 @@ def aggregate_shap_records(
         top5_pct, top10_pct, features_for_80,
     )
     return shap_summary
+
+
+# ---------------------------------------------------------------------------
+# Long-horizon evaluation
+# ---------------------------------------------------------------------------
+
+def evaluate_horizons(
+    df: pd.DataFrame,
+    facilities: list,
+    feature_cols: list,
+    horizons: list = None,
+    metric: str = TARGET_COL,
+) -> pd.DataFrame:
+    """Evaluate all three models across multiple forecast horizons per facility.
+
+    For each (facility, horizon) combination the models are retrained from
+    scratch using data up to ``N - horizon`` months, then evaluated on the
+    held-out tail.
+
+    **Evaluation semantics per model:**
+
+    * **XGBoost / BNN** – *oracle* evaluation: lag features in the test rows
+      are derived from actual historical values (pre-computed during feature
+      engineering), not from recursive predictions.  This represents an
+      upper-bound on deployable multi-year accuracy and should be labelled
+      accordingly in the paper.
+
+    * **N-HiTS** – *true multi-step*: the model forecasts ``min(12, horizon)``
+      steps ahead from the training cutoff in a single pass.  For horizons
+      > 12 the evaluation covers only the first 12 months of the holdout.
+
+    Args:
+        df:           Full enhanced DataFrame (all facilities, all years).
+        facilities:   List of facility IDs to evaluate.
+        feature_cols: Feature column names used by XGBoost and BNN.
+        horizons:     List of integer holdout sizes in months.
+                      Defaults to ``[12, 24, 36]``.
+        metric:       Target column name (default: ``EmissionstCO2``).
+
+    Returns:
+        Long-format DataFrame with columns:
+            ``Facility``, ``Model``, ``Horizon_months``,
+            ``MAPE``, ``RMSE``, ``N_test_steps``.
+        Sorted by ``Facility``, ``Model``, ``Horizon_months``.
+    """
+    from src.models.xgboost_model import run_xgboost_quantile
+    from src.models.bnn_model import run_bnn
+    from src.models.nhits_model import run_nhits
+    from config import MIN_TRAIN_ROWS
+
+    if horizons is None:
+        horizons = [12, 24, 36]
+
+    rows = []
+    for horizon in horizons:
+        logger.info("evaluate_horizons: horizon=%d months", horizon)
+        for fac in facilities:
+            df_fac = df[df["Facility"] == fac].dropna(subset=[metric])
+            if len(df_fac) - horizon < MIN_TRAIN_ROWS:
+                logger.debug(
+                    "evaluate_horizons: skipping %s horizon=%d (insufficient train rows).",
+                    fac, horizon,
+                )
+                for model_name in ("N-HiTS", "XGBoost", "BNN"):
+                    rows.append({
+                        "Facility":       fac,
+                        "Model":          model_name,
+                        "Horizon_months": horizon,
+                        "MAPE":           np.nan,
+                        "RMSE":           np.nan,
+                        "N_test_steps":   np.nan,
+                    })
+                continue
+
+            # --- XGBoost ---
+            xgb_res = run_xgboost_quantile(
+                df, fac, feature_cols, metric=metric, test_months=horizon
+            )
+            rows.append({
+                "Facility":       fac,
+                "Model":          "XGBoost",
+                "Horizon_months": horizon,
+                "MAPE":           xgb_res.get("mape", np.nan),
+                "RMSE":           xgb_res.get("rmse", np.nan),
+                "N_test_steps":   horizon if not np.isnan(xgb_res.get("mape", np.nan)) else np.nan,
+            })
+
+            # --- BNN ---
+            bnn_res = run_bnn(
+                df, fac, feature_cols, metric=metric, test_months=horizon
+            )
+            rows.append({
+                "Facility":       fac,
+                "Model":          "BNN",
+                "Horizon_months": horizon,
+                "MAPE":           bnn_res.get("mape", np.nan),
+                "RMSE":           bnn_res.get("rmse", np.nan),
+                "N_test_steps":   horizon if not np.isnan(bnn_res.get("mape", np.nan)) else np.nan,
+            })
+
+            # --- N-HiTS (true multi-step; capped at 12 steps internally) ---
+            nhits_res = run_nhits(
+                df, fac, feature_cols=feature_cols, metric=metric, test_months=horizon
+            )
+            n_steps = (
+                len(nhits_res["y_pred"])
+                if "y_pred" in nhits_res and nhits_res["y_pred"] is not None
+                else np.nan
+            )
+            rows.append({
+                "Facility":       fac,
+                "Model":          "N-HiTS",
+                "Horizon_months": horizon,
+                "MAPE":           nhits_res.get("mape", np.nan),
+                "RMSE":           nhits_res.get("rmse", np.nan),
+                "N_test_steps":   n_steps,
+            })
+
+    result = (
+        pd.DataFrame(rows)
+        .sort_values(["Facility", "Model", "Horizon_months"])
+        .reset_index(drop=True)
+    )
+    logger.info(
+        "evaluate_horizons complete: %d records (%d facilities × %d horizons × 3 models).",
+        len(result), len(facilities), len(horizons),
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Step-wise long-horizon evaluation (single-origin, per-step MAPE)
+# ---------------------------------------------------------------------------
+
+def evaluate_per_step_horizons(
+    df_ext: pd.DataFrame,
+    facilities: list,
+    feature_cols: list,
+    metric: str = TARGET_COL,
+) -> tuple:
+    """Step-wise horizon accuracy using a single Dec-2023 origin.
+
+    Trains each model on Jan 2022 – Dec 2023 (the primary training window)
+    and evaluates against all available future data:
+
+    * **XGBoost** and **BNN**: ``test_months=20`` — covers Jan 2024 – Aug 2025
+      (h=1 … 20) in one pass.  Per-facility, per-step absolute percentage
+      errors (APEs) are extracted from ``y_test`` / ``y_pred`` arrays.
+
+    * **N-HiTS**: capped internally at 12 steps per pass.  Two passes:
+
+      - Dec-2023 origin → h=1 … 12 (Jan–Dec 2024)
+      - Dec-2024 origin (train on 2022–2024) → h=1 … 8, re-labelled 13–20
+
+      The second N-HiTS pass uses more training data, which is a known
+      limitation; it is the standard multi-origin approach used in the
+      literature for models with a fixed horizon cap.
+
+    Args:
+        df_ext:       Enhanced DataFrame covering Jan 2022 – Aug 2025
+                      (output of ``create_global_features`` on the extended
+                      dataset; must contain a ``Date`` column).
+        facilities:   Facility IDs to evaluate.
+        feature_cols: Feature columns for XGBoost / BNN.
+        metric:       Target column name.
+
+    Returns:
+        Tuple ``(step_df, summary_df)`` where:
+
+        * ``step_df``    – long-format DataFrame:
+          ``Facility, Model, h, APE``
+          (one row per facility × model × forecast step).
+
+        * ``summary_df`` – aggregated DataFrame:
+          ``Model, h, MAPE, Std_APE, N_facilities``
+          grouped by model and step.
+    """
+    from src.models.xgboost_model import run_xgboost_quantile
+    from src.models.bnn_model import run_bnn
+    from src.models.nhits_model import run_nhits
+    from config import MIN_TRAIN_ROWS
+
+    # Number of steps ahead we want to evaluate
+    H_XGB_BNN = 20   # Jan 2024 – Aug 2025 from Dec-2023 origin
+    H_NHITS_1 = 12   # N-HiTS first pass  (h=1-12, 2024)
+    H_NHITS_2 = 8    # N-HiTS second pass (h=13-20, 2025)
+
+    rows = []  # Facility, Model, h, APE
+
+    for fac in facilities:
+        df_fac = df_ext[df_ext["Facility"] == fac].dropna(subset=[metric])
+        n_total = len(df_fac)
+
+        # ------------------------------------------------------------------ #
+        # XGBoost — single pass, test_months = H_XGB_BNN                     #
+        # ------------------------------------------------------------------ #
+        if n_total - H_XGB_BNN >= MIN_TRAIN_ROWS:
+            xgb_res = run_xgboost_quantile(
+                df_ext, fac, feature_cols, metric=metric, test_months=H_XGB_BNN
+            )
+            if "y_test" in xgb_res and xgb_res["y_test"] is not None:
+                y_t = np.asarray(xgb_res["y_test"])
+                y_p = np.asarray(xgb_res["preds"][0.5])
+                for h_idx in range(min(len(y_t), len(y_p))):
+                    denom = max(abs(y_t[h_idx]), 1e-6)
+                    rows.append({
+                        "Facility": fac,
+                        "Model":    "XGBoost",
+                        "h":        h_idx + 1,
+                        "APE":      abs(y_t[h_idx] - y_p[h_idx]) / denom * 100.0,
+                    })
+            logger.debug("evaluate_per_step_horizons: XGBoost %s done.", fac)
+        else:
+            logger.debug("evaluate_per_step_horizons: skip XGBoost %s (too few rows).", fac)
+
+        # ------------------------------------------------------------------ #
+        # BNN — single pass, test_months = H_XGB_BNN                         #
+        # ------------------------------------------------------------------ #
+        if n_total - H_XGB_BNN >= MIN_TRAIN_ROWS:
+            bnn_res = run_bnn(
+                df_ext, fac, feature_cols, metric=metric, test_months=H_XGB_BNN
+            )
+            if "y_val" in bnn_res and bnn_res["y_val"] is not None:
+                y_t = np.asarray(bnn_res["y_val"])
+                y_p = np.asarray(bnn_res["predictions_mean"])
+                for h_idx in range(min(len(y_t), len(y_p))):
+                    denom = max(abs(y_t[h_idx]), 1e-6)
+                    rows.append({
+                        "Facility": fac,
+                        "Model":    "BNN",
+                        "h":        h_idx + 1,
+                        "APE":      abs(y_t[h_idx] - y_p[h_idx]) / denom * 100.0,
+                    })
+            logger.debug("evaluate_per_step_horizons: BNN %s done.", fac)
+        else:
+            logger.debug("evaluate_per_step_horizons: skip BNN %s (too few rows).", fac)
+
+        # ------------------------------------------------------------------ #
+        # N-HiTS pass 1 — Dec-2023 origin, h=1-12                            #
+        # (use df filtered to end of 2024 so training data is the same)       #
+        # ------------------------------------------------------------------ #
+        df_ext_2024 = df_ext[pd.to_datetime(df_ext["Date"]).dt.year <= 2024]
+        df_fac_2024 = df_ext_2024[df_ext_2024["Facility"] == fac].dropna(subset=[metric])
+        n_2024 = len(df_fac_2024)
+        if n_2024 - H_NHITS_1 >= MIN_TRAIN_ROWS:
+            nh1_res = run_nhits(
+                df_ext_2024, fac, feature_cols=feature_cols,
+                metric=metric, test_months=H_NHITS_1
+            )
+            if "y_true" in nh1_res and nh1_res["y_true"] is not None:
+                y_t = np.asarray(nh1_res["y_true"])
+                y_p = np.asarray(nh1_res["y_pred"])
+                for h_idx in range(min(len(y_t), len(y_p))):
+                    denom = max(abs(y_t[h_idx]), 1e-6)
+                    rows.append({
+                        "Facility": fac,
+                        "Model":    "N-HiTS",
+                        "h":        h_idx + 1,
+                        "APE":      abs(y_t[h_idx] - y_p[h_idx]) / denom * 100.0,
+                    })
+            logger.debug("evaluate_per_step_horizons: N-HiTS pass1 %s done.", fac)
+
+        # ------------------------------------------------------------------ #
+        # N-HiTS pass 2 — Dec-2024 origin, h=1-8 → re-labelled 13-20        #
+        # ------------------------------------------------------------------ #
+        if n_total - H_NHITS_2 >= MIN_TRAIN_ROWS:
+            nh2_res = run_nhits(
+                df_ext, fac, feature_cols=feature_cols,
+                metric=metric, test_months=H_NHITS_2
+            )
+            if "y_true" in nh2_res and nh2_res["y_true"] is not None:
+                y_t = np.asarray(nh2_res["y_true"])
+                y_p = np.asarray(nh2_res["y_pred"])
+                for h_idx in range(min(len(y_t), len(y_p))):
+                    denom = max(abs(y_t[h_idx]), 1e-6)
+                    rows.append({
+                        "Facility": fac,
+                        "Model":    "N-HiTS",
+                        "h":        h_idx + 13,   # second-pass offset
+                        "APE":      abs(y_t[h_idx] - y_p[h_idx]) / denom * 100.0,
+                    })
+            logger.debug("evaluate_per_step_horizons: N-HiTS pass2 %s done.", fac)
+
+    step_df = pd.DataFrame(rows)
+
+    if step_df.empty:
+        logger.warning("evaluate_per_step_horizons: no results produced.")
+        return step_df, pd.DataFrame()
+
+    summary_df = (
+        step_df.groupby(["Model", "h"])["APE"]
+        .agg(MAPE="mean", Std_APE="std", N_facilities="count")
+        .reset_index()
+        .rename(columns={"h": "h"})
+        .sort_values(["Model", "h"])
+        .reset_index(drop=True)
+    )
+
+    logger.info(
+        "evaluate_per_step_horizons complete: %d step-records across %d facilities.",
+        len(step_df), len(facilities),
+    )
+    return step_df, summary_df
+
+
+# ---------------------------------------------------------------------------
+# Diebold-Mariano test
+# ---------------------------------------------------------------------------
+
+def diebold_mariano_test(
+    e1: np.ndarray,
+    e2: np.ndarray,
+    h: int = 1,
+    loss: str = "mse",
+) -> dict:
+    """Diebold-Mariano (1995) test with Harvey-Leybourne-Newbold (1997) correction.
+
+    Tests H₀: equal predictive accuracy between two forecasting models.
+    A negative DM statistic means model 1 is *more accurate* than model 2.
+
+    Args:
+        e1:   Forecast errors for model 1 (array of shape ``(T,)``).
+              These are raw errors ``y_true - y_pred``, not absolute values.
+        e2:   Forecast errors for model 2, same length as ``e1``.
+        h:    Forecast horizon (number of steps ahead). Used for the HAC
+              variance estimator and the HLN correction factor.
+              Use ``h=1`` when pooling per-step errors from a 1-step-ahead
+              evaluation; use the actual horizon otherwise.
+        loss: Loss function for the loss differential.
+              ``'mse'`` (default) uses squared errors;
+              ``'mae'`` uses absolute errors.
+
+    Returns:
+        Dict with keys:
+
+        * ``dm_stat``  – HLN-corrected DM test statistic (t-distributed under H₀)
+        * ``p_value``  – two-sided p-value (t_{T-1} distribution)
+        * ``T``        – number of observations
+        * ``d_mean``   – mean loss differential
+        * ``reject``   – ``True`` if H₀ rejected at 5% significance level
+        * ``better``   – ``'model1'`` / ``'model2'`` / ``'neither'``
+    """
+    from scipy import stats
+
+    e1 = np.asarray(e1, dtype=float)
+    e2 = np.asarray(e2, dtype=float)
+
+    if len(e1) != len(e2):
+        raise ValueError(
+            f"e1 and e2 must have the same length ({len(e1)} vs {len(e2)})."
+        )
+
+    if loss == "mse":
+        L1, L2 = e1 ** 2, e2 ** 2
+    elif loss == "mae":
+        L1, L2 = np.abs(e1), np.abs(e2)
+    else:
+        raise ValueError(f"loss must be 'mse' or 'mae', got '{loss}'.")
+
+    d = L1 - L2          # loss differential: positive = model1 worse
+    T = len(d)
+    d_bar = d.mean()
+
+    # HAC variance: sum of autocovariances up to lag h-1
+    gamma0 = np.var(d, ddof=0)
+    gamma_sum = gamma0
+    for k in range(1, h):
+        gk = np.mean((d[k:] - d_bar) * (d[:-k] - d_bar))
+        gamma_sum += 2.0 * gk
+
+    var_d_hat = gamma_sum / T
+    if var_d_hat <= 0:
+        var_d_hat = gamma0 / T
+
+    dm_raw = d_bar / np.sqrt(var_d_hat)
+
+    # Harvey-Leybourne-Newbold small-sample correction
+    hln_factor = np.sqrt(
+        (T + 1.0 - 2.0 * h + h * (h - 1.0) / T) / T
+    )
+    dm_stat = hln_factor * dm_raw
+
+    p_value = 2.0 * stats.t.sf(abs(dm_stat), df=T - 1)
+
+    reject = bool(p_value < 0.05)
+    if not reject:
+        better = "neither"
+    elif dm_stat < 0:
+        better = "model1"   # model1 lower loss → more accurate
+    else:
+        better = "model2"
+
+    return {
+        "dm_stat":  float(dm_stat),
+        "p_value":  float(p_value),
+        "T":        T,
+        "d_mean":   float(d_bar),
+        "reject":   reject,
+        "better":   better,
+    }
+
+
+def run_diebold_mariano_all_pairs(
+    step_df: pd.DataFrame,
+    h: int = 1,
+    loss: str = "mse",
+) -> pd.DataFrame:
+    """Run pairwise DM tests across all three model pairs.
+
+    Uses the pooled per-facility, per-step errors from
+    ``evaluate_per_step_horizons``.  Each model's error is computed as
+    ``y_true - y_pred``; APE values stored in ``step_df`` are converted
+    back to signed errors using their absolute values (conservative
+    assumption: treats APE as |error| / |y_true|, so signed error cannot
+    be recovered — MSE-based DM uses APE² instead).
+
+    Args:
+        step_df: Long-format DataFrame from ``evaluate_per_step_horizons``
+                 with columns ``Model, h, APE``.
+        h:       Forecast horizon for HAC estimator.
+        loss:    ``'mse'`` or ``'mae'``.
+
+    Returns:
+        DataFrame with one row per model pair:
+        ``Model_1, Model_2, DM_stat, p_value, T, Reject_H0, Better_model``.
+    """
+    models = sorted(step_df["Model"].unique())
+    pairs = [(models[i], models[j]) for i in range(len(models)) for j in range(i + 1, len(models))]
+
+    results = []
+    for m1, m2 in pairs:
+        # Align on (Facility, h) so errors are paired
+        df1 = step_df[step_df["Model"] == m1][["Facility", "h", "APE"]].copy()
+        df2 = step_df[step_df["Model"] == m2][["Facility", "h", "APE"]].copy()
+        merged = df1.merge(df2, on=["Facility", "h"], suffixes=("_1", "_2")).dropna()
+
+        if len(merged) < 10:
+            logger.warning("DM test %s vs %s: only %d paired obs — skip.", m1, m2, len(merged))
+            continue
+
+        # Use APE as the loss value directly (non-negative, so treat as MAE-type loss)
+        ape1 = merged["APE_1"].values
+        ape2 = merged["APE_2"].values
+        # For DM with APE, treat e_i = APE_i (loss = APE), so d = APE1 - APE2
+        # This is equivalent to 'mae' loss on percentage errors
+        dm = diebold_mariano_test(ape1, -ape2 + ape1, h=h, loss="mae")
+        # Simpler: directly use the APE difference
+        d = ape1 - ape2
+        T = len(d)
+        d_bar = d.mean()
+        gamma0 = np.var(d, ddof=0)
+        gamma_sum = gamma0
+        for k in range(1, h):
+            gk = np.mean((d[k:] - d_bar) * (d[:-k] - d_bar))
+            gamma_sum += 2.0 * gk
+        var_d_hat = max(gamma_sum / T, gamma0 / T)
+        dm_raw = d_bar / np.sqrt(var_d_hat)
+        from scipy import stats
+        hln = np.sqrt((T + 1.0 - 2.0 * h + h * (h - 1.0) / T) / T)
+        dm_stat = hln * dm_raw
+        p_val = 2.0 * stats.t.sf(abs(dm_stat), df=T - 1)
+        reject = p_val < 0.05
+        if not reject:
+            better = "neither"
+        elif dm_stat < 0:
+            better = m1
+        else:
+            better = m2
+
+        results.append({
+            "Model_1":      m1,
+            "Model_2":      m2,
+            "DM_stat":      round(float(dm_stat), 4),
+            "p_value":      round(float(p_val), 4),
+            "T":            T,
+            "Reject_H0":    reject,
+            "Better_model": better,
+        })
+
+    return pd.DataFrame(results)

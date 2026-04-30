@@ -1,3 +1,6 @@
+# ── Local notes (not for publication) ───────────────────────────────────────
+notes/
+
 # ── Data ────────────────────────────────────────────────────────────────────
 # Raw / large data files are excluded, but the anonymised dataset is tracked
 *.xlsx

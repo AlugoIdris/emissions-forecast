@@ -19,7 +19,7 @@ import numpy as np
 from sklearn.preprocessing import RobustScaler
 from sklearn.linear_model import LinearRegression
 
-from config import TARGET_COL, RANDOM_SEED
+from config import TARGET_COL, RANDOM_SEED, OUTLIER_FACILITIES
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 logger = logging.getLogger(__name__)
@@ -27,12 +27,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Constants – override via config.py or pass as arguments
 # ---------------------------------------------------------------------------
-
-OUTLIER_FACILITIES = [
-    "F1", "F2", "F5", "F8", "F29", "F34", "F15", "F26", "F3", "F20",
-    "F14", "F21", "F24", "F35", "F39", "F16", "F23", "F32",
-    "F45", "F46", "F48", "F42", "F40", "F41", "F38", "F37", "F36",
-]
 
 LAG_PERIODS   = [1, 3, 6, 12]
 DATE_MIN_YEAR = 2016          # inclusive (removes 2015 baseline)
@@ -153,13 +147,19 @@ def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
 def add_region_dummies(df: pd.DataFrame) -> pd.DataFrame:
     """One-hot encode the ``Region`` column (prefix ``Region_``).
 
+    Normalises region labels before encoding so that values like
+    ``"Region 1"`` produce clean column names (``Region_1``) with no
+    embedded spaces, which is required by XGBoost's DMatrix.
+
     Args:
         df: DataFrame with a ``Region`` column.
 
     Returns:
         DataFrame with original columns plus region dummy columns.
     """
-    dummies = pd.get_dummies(df["Region"], prefix="Region")
+    # Strip "Region " prefix if present so "Region 1" -> "1", "R1" -> "R1"
+    region_codes = df["Region"].str.replace(r"^Region\s+", "", regex=True)
+    dummies = pd.get_dummies(region_codes, prefix="Region")
     df = pd.concat([df, dummies], axis=1)
     logger.info("Region dummies added: %s", list(dummies.columns))
     return df
@@ -555,6 +555,98 @@ def generate_synthetic_sample(
     df.to_csv(output_path, index=False)
     logger.info("Synthetic sample → %s  (%d rows)", output_path, len(df))
     return df
+
+
+# ---------------------------------------------------------------------------
+# Facility data-quality report
+# ---------------------------------------------------------------------------
+
+def compute_facility_quality_report(
+    df: pd.DataFrame,
+    metric: str = TARGET_COL,
+) -> pd.DataFrame:
+    """Compute per-facility data completeness and quality statistics.
+
+    Useful for verifying that the 20 facilities retained in the pipeline
+    meet minimum quality standards and for communicating data provenance
+    to reviewers.
+
+    Quality tiers are based on completeness (actual rows / expected monthly
+    rows derived from each facility's date range):
+        - ``Good``  : >= 90 % complete
+        - ``Fair``  : >= 70 % complete
+        - ``Poor``  : < 70 % complete
+
+    Args:
+        df:     DataFrame containing at least ``Facility``, ``Date``,
+                and the ``metric`` column.  ``Date`` must be parseable
+                by ``pd.to_datetime``.
+        metric: Target column to assess for missingness (default:
+                ``EmissionstCO2``).
+
+    Returns:
+        DataFrame (one row per facility) with columns:
+            ``Facility``, ``N_rows``, ``Date_min``, ``Date_max``,
+            ``Expected_months``, ``Completeness_pct``,
+            ``Target_missing_pct``, ``N_target_valid``,
+            ``Quality_tier``.
+        Sorted by ``Completeness_pct`` descending.
+    """
+    df = df.copy()
+    df["Date"] = pd.to_datetime(df["Date"])
+
+    records = []
+    for fac, grp in df.groupby("Facility"):
+        grp = grp.sort_values("Date")
+        date_min = grp["Date"].min()
+        date_max = grp["Date"].max()
+
+        # Expected number of monthly observations in the date range
+        total_months = (
+            (date_max.year - date_min.year) * 12
+            + (date_max.month - date_min.month)
+            + 1
+        )
+
+        n_rows    = len(grp)
+        comp_pct  = round(n_rows / total_months * 100, 1) if total_months > 0 else 0.0
+        n_valid   = int(grp[metric].notna().sum()) if metric in grp.columns else 0
+        miss_pct  = round((1 - n_valid / n_rows) * 100, 1) if n_rows > 0 else 100.0
+
+        if comp_pct >= 90:
+            tier = "Good"
+        elif comp_pct >= 70:
+            tier = "Fair"
+        else:
+            tier = "Poor"
+
+        records.append({
+            "Facility":            fac,
+            "N_rows":              n_rows,
+            "Date_min":            date_min.strftime("%Y-%m"),
+            "Date_max":            date_max.strftime("%Y-%m"),
+            "Expected_months":     total_months,
+            "Completeness_pct":    comp_pct,
+            "Target_missing_pct":  miss_pct,
+            "N_target_valid":      n_valid,
+            "Quality_tier":        tier,
+        })
+
+    report = (
+        pd.DataFrame(records)
+        .sort_values("Completeness_pct", ascending=False)
+        .reset_index(drop=True)
+    )
+
+    tier_counts = report["Quality_tier"].value_counts().to_dict()
+    logger.info(
+        "Facility quality report: %d facilities | Good=%d  Fair=%d  Poor=%d",
+        len(report),
+        tier_counts.get("Good", 0),
+        tier_counts.get("Fair", 0),
+        tier_counts.get("Poor", 0),
+    )
+    return report
 
 
 # ---------------------------------------------------------------------------
