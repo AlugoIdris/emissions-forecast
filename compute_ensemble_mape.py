@@ -288,7 +288,8 @@ for m, v in oof_eval["individual_mapes"].items():
 
 # Per-facility TEST ensemble MAPE
 print(f"\n  Per-facility test ensemble MAPE:\n")
-fac_ensemble = {}
+fac_ensemble  = {}
+trace_records = []          # collected for Figure 8
 
 for r in results:
     fac        = r["Facility"]
@@ -319,6 +320,18 @@ for r in results:
     ens_mape = safe_mape(y_arr, ens_preds)
     ens_rmse = float(mean_squared_error(y_arr, ens_preds) ** 0.5)
 
+    # Collect trace for Figure 8
+    for step in range(n):
+        trace_records.append({
+            "Facility": fac,
+            "Step":     step + 1,
+            "Actual":   float(y_arr[step]),
+            "NHITS":    float(nhits_pred[step]),
+            "XGBoost":  float(xgb_pred[step]),
+            "BNN":      float(bnn_pred[step]),
+            "Ensemble": float(ens_preds[step]),
+        })
+
     print(
         f"    {fac:<20}  MAPE={ens_mape:.1f}%  "
         f"RMSE={ens_rmse:.3f}  "
@@ -326,6 +339,14 @@ for r in results:
         flush=True,
     )
     fac_ensemble[fac] = {"mape": ens_mape, "rmse": ens_rmse}
+
+# ---------------------------------------------------------------------------
+# Step 3b – Save test-period traces for Figure 8
+# ---------------------------------------------------------------------------
+traces_df = pd.DataFrame(trace_records)
+traces_df.to_csv("results/test_period_predictions.csv", index=False)
+print(f"\n  Saved {len(trace_records)} test-period trace rows to "
+      f"results/test_period_predictions.csv")
 
 # ---------------------------------------------------------------------------
 # Step 4 – Write EnsembleMAPE / EnsembleRMSE to model_accuracy.csv
@@ -350,5 +371,27 @@ print(f"  Meta-learner OOF MAPE (stacking):                  {oof_eval['ensemble
 print(f"  (N-HiTS: {acc_df['NHITSMAPE'].mean():.2f}%  "
       f"XGBoost: {acc_df['XGBoostMAPE'].mean():.2f}%  "
       f"BNN: {acc_df['BNNMAPE'].mean():.2f}%)")
+
+# ---------------------------------------------------------------------------
+# Step 5 – Render Figure 8 (forecast traces)
+# ---------------------------------------------------------------------------
+print("\n[5/5] Rendering Figure 8 (forecast traces) …")
+try:
+    from src.visualization import plot_forecast_traces
+
+    risk_df_fig8 = None
+    if os.path.exists("results/risk_assessment.csv"):
+        risk_df_fig8 = pd.read_csv("results/risk_assessment.csv")
+
+    fig8_path = plot_forecast_traces(
+        traces_df,
+        risk_df=risk_df_fig8,
+        results_df=acc_df,
+        output_dir="figures",
+        show=False,
+    )
+    print(f"  Saved {fig8_path}")
+except Exception as _e:
+    print(f"  WARNING: Figure 8 skipped — {_e}")
 
 print("\nDone.")

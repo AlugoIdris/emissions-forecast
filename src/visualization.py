@@ -642,6 +642,142 @@ def plot_facility_clusters(
 
 
 # ---------------------------------------------------------------------------
+# Figure 8 — Forecast Traces vs Actual (test-period, representative facilities)
+# ---------------------------------------------------------------------------
+
+def plot_forecast_traces(
+    traces_df: pd.DataFrame,
+    risk_df: Optional[pd.DataFrame] = None,
+    results_df: Optional[pd.DataFrame] = None,
+    select_facilities: Optional[list] = None,
+    n_panels: int = 6,
+    output_dir: str = "figures",
+    show: bool = False,
+) -> str:
+    """2×3 grid of actual vs predicted emission traces over the 12-month test period.
+
+    Automatically selects ``n_panels`` representative facilities spanning the
+    full range of ensemble MAPE performance when ``select_facilities`` is None.
+
+    Args:
+        traces_df:          Long-format DataFrame with columns
+                            [Facility, Step, Actual, NHITS, XGBoost, BNN, Ensemble].
+        risk_df:            Risk assessment DataFrame (optional); used to add
+                            risk label to each panel subtitle.
+        results_df:         Per-facility accuracy DataFrame (optional); used to
+                            annotate each panel with EnsembleMAPE.
+        select_facilities:  Explicit list of facility names to display.
+                            If None, auto-selects based on MAPE spread.
+        n_panels:           Number of panels when auto-selecting (default 6).
+        output_dir:         Directory to save the figure.
+        show:               Display inline if True.
+
+    Returns:
+        Saved file path.
+    """
+    _apply_style()
+
+    # ── Facility selection ────────────────────────────────────────────────
+    all_facs = sorted(traces_df["Facility"].unique())
+
+    if select_facilities is not None:
+        chosen = [f for f in select_facilities if f in all_facs]
+    elif results_df is not None and "EnsembleMAPE" in results_df.columns:
+        # Evenly-spaced sample across sorted EnsembleMAPE range
+        sorted_facs = (
+            results_df[["Facility", "EnsembleMAPE"]]
+            .dropna()
+            .sort_values("EnsembleMAPE")["Facility"]
+            .tolist()
+        )
+        n   = min(n_panels, len(sorted_facs))
+        idx = [int(round(i * (len(sorted_facs) - 1) / (n - 1))) for i in range(n)]
+        chosen = [sorted_facs[i] for i in idx]
+    else:
+        chosen = all_facs[:n_panels]
+
+    n_chosen = len(chosen)
+    ncols    = 3
+    nrows    = int(np.ceil(n_chosen / ncols))
+
+    # ── Build risk + MAPE lookup dicts ────────────────────────────────────
+    risk_lookup = {}
+    if risk_df is not None and "RiskLevelEnsemble" in risk_df.columns:
+        risk_lookup = dict(zip(risk_df["Facility"], risk_df["RiskLevelEnsemble"]))
+
+    mape_lookup = {}
+    if results_df is not None and "EnsembleMAPE" in results_df.columns:
+        mape_lookup = dict(zip(results_df["Facility"], results_df["EnsembleMAPE"]))
+
+    # ── Plot ──────────────────────────────────────────────────────────────
+    fig, axes = plt.subplots(nrows, ncols, figsize=(14, 4.5 * nrows))
+    fig.suptitle(
+        r"Test-Period Forecast Traces vs Actual Emissions (tCO$_2$)",
+        fontsize=14, fontweight="bold", y=1.01,
+    )
+    axes_flat = axes.flatten() if n_chosen > 1 else [axes]
+
+    line_specs = [
+        ("Actual",   "black",                  2.2,  "-",  None),
+        ("NHITS",    MODEL_COLORS["N-HiTS"],   1.5,  "-",  "N-HiTS"),
+        ("XGBoost",  MODEL_COLORS["XGBoost"],  1.5,  "-",  "XGBoost"),
+        ("BNN",      MODEL_COLORS["BNN"],       1.5,  "-",  "BNN"),
+        ("Ensemble", MODEL_COLORS["Ensemble"],  1.8,  "--", "Ensemble"),
+    ]
+
+    for idx, fac in enumerate(chosen):
+        ax  = axes_flat[idx]
+        sub = traces_df[traces_df["Facility"] == fac].sort_values("Step")
+        steps = sub["Step"].values
+
+        handles = []
+        for col, color, lw, ls, label in line_specs:
+            if col not in sub.columns:
+                continue
+            ln, = ax.plot(steps, sub[col].values,
+                          color=color, linewidth=lw, linestyle=ls,
+                          label=label or col)
+            if label:
+                handles.append(ln)
+
+        # Subtitle
+        risk  = risk_lookup.get(fac, "")
+        mape  = mape_lookup.get(fac, None)
+        parts = [fac]
+        if mape is not None:
+            parts.append(f"Ens.MAPE={mape:.1f}%")
+        if risk:
+            parts.append(risk)
+        ax.set_title("  |  ".join(parts), fontsize=10, fontweight="bold")
+        ax.set_xlabel("Test-Period Step (months)", fontsize=9)
+        ax.set_ylabel(r"Emissions (tCO$_2$)", fontsize=9)
+        ax.tick_params(labelsize=8)
+        ax.set_xticks(steps[::2] if len(steps) > 6 else steps)
+        ax.grid(alpha=0.3)
+
+    # Hide any unused axes
+    for idx in range(n_chosen, len(axes_flat)):
+        axes_flat[idx].set_visible(False)
+
+    # Shared legend below the grid
+    if handles:
+        fig.legend(
+            handles,
+            [h.get_label() for h in handles],
+            loc="lower center",
+            ncol=len(handles),
+            fontsize=10,
+            frameon=True,
+            bbox_to_anchor=(0.5, -0.03),
+        )
+
+    plt.tight_layout()
+    path = os.path.join(output_dir, "figure8_forecast_traces.png")
+    _save(fig, path, show)
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Figure 9 — SHAP Dependence Plots (3 features × 3 models)
 # ---------------------------------------------------------------------------
 
@@ -943,6 +1079,7 @@ def plot_all(
     X_raw: dict | None = None,
     decomp_df: pd.DataFrame | None = None,
     horizon_summary: pd.DataFrame | None = None,
+    traces_df: pd.DataFrame | None = None,
 ) -> list[str]:
     """Render and save all publication figures plus the dashboard.
 
@@ -963,6 +1100,10 @@ def plot_all(
         horizon_summary:  Per-model, per-step mean MAPE DataFrame with columns
                           [Model, h, MAPE].  When provided, Figure 11
                           (crossover projection) is generated.
+        traces_df:        Long-format test-period predictions DataFrame with
+                          columns [Facility, Step, Actual, NHITS, XGBoost,
+                          BNN, Ensemble].  When provided, Figure 8
+                          (forecast traces) is generated.
 
     Returns:
         List of saved file paths.
@@ -980,6 +1121,12 @@ def plot_all(
     paths.append(plot_probability_distribution(risk_df, output_dir, show))
     paths.append(plot_model_agreement(risk_df, output_dir=output_dir, show=show))
     paths.append(plot_facility_accuracy(results_df, output_dir, show))
+
+    if traces_df is not None and len(traces_df) > 0:
+        paths.append(plot_forecast_traces(
+            traces_df, risk_df=risk_df, results_df=results_df,
+            output_dir=output_dir, show=show,
+        ))
 
     if shap_raw is not None and X_raw is not None:
         paths.append(plot_shap_dependence(shap_raw, X_raw, output_dir=output_dir, show=show))
