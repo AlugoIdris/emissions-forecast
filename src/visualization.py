@@ -1065,6 +1065,102 @@ def plot_horizon_crossover(
 
 
 # ---------------------------------------------------------------------------
+# Figure 12 — Risk Tier Summary (donut + horizontal bar)
+# ---------------------------------------------------------------------------
+
+def plot_risk_tier_summary(
+    risk_df: pd.DataFrame,
+    output_dir: str = "figures",
+    show: bool = False,
+) -> str:
+    """Two-panel figure: donut chart of facility counts per risk tier (left)
+    and a horizontal stacked bar showing tier breakdown per region (right).
+
+    Args:
+        risk_df:    Risk assessment DataFrame with columns ``RiskLevelEnsemble``
+                    and ``Facility``.
+        output_dir: Directory to save the figure.
+        show:       Display inline if True.
+
+    Returns:
+        Saved file path.
+    """
+    _apply_style()
+
+    tier_order  = ["Critical Risk", "High Risk", "Medium Risk", "Low Risk"]
+    counts      = risk_df["RiskLevelEnsemble"].value_counts().reindex(tier_order, fill_value=0)
+    colors_list = [RISK_COLORS[t] for t in tier_order]
+    total       = counts.sum()
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+    fig.suptitle("2030 Compliance Risk Tier Distribution (30 Facilities)",
+                 fontsize=14, fontweight="bold")
+
+    # ── Panel 1: donut chart ─────────────────────────────────────────────
+    wedges, texts, autotexts = ax1.pie(
+        counts,
+        labels=None,
+        colors=colors_list,
+        autopct=lambda p: f"{p:.0f}%\n({int(round(p * total / 100))})",
+        startangle=90,
+        pctdistance=0.75,
+        wedgeprops=dict(width=0.52, edgecolor="white", linewidth=1.5),
+    )
+    for at in autotexts:
+        at.set_fontsize(10)
+        at.set_fontweight("bold")
+    ax1.legend(
+        wedges, [f"{t}  (n={counts[t]})" for t in tier_order],
+        loc="lower center", bbox_to_anchor=(0.5, -0.18),
+        ncol=2, fontsize=9, frameon=False,
+    )
+    ax1.set_title("Overall Risk Distribution", fontsize=12, fontweight="bold", pad=12)
+
+    # ── Panel 2: stacked horizontal bar per cluster (if Cluster col exists)
+    # Fall back to a simple sorted bar of individual facility probabilities
+    if "Cluster" in risk_df.columns:
+        groups   = sorted(risk_df["Cluster"].unique())
+        y_pos    = np.arange(len(groups))
+        left     = np.zeros(len(groups))
+        for tier, color in zip(tier_order, colors_list):
+            widths = [
+                (risk_df[risk_df["Cluster"] == g]["RiskLevelEnsemble"] == tier).sum()
+                for g in groups
+            ]
+            ax2.barh(y_pos, widths, left=left, color=color,
+                     label=tier, height=0.55, edgecolor="white")
+            left += np.array(widths)
+        ax2.set_yticks(y_pos)
+        ax2.set_yticklabels(groups, fontsize=10)
+        ax2.set_xlabel("Number of Facilities", fontsize=11)
+        ax2.set_title("Risk Tier by Emission Cluster", fontsize=12, fontweight="bold")
+        ax2.legend(loc="lower right", fontsize=9, frameon=True)
+        ax2.grid(axis="x", alpha=0.3)
+    else:
+        # Simple bar: compliance probability per facility, coloured by tier
+        prob_sorted = risk_df.sort_values("ProbMeetTargetEnsemble").reset_index(drop=True)
+        bar_colors  = prob_sorted["RiskLevelEnsemble"].map(RISK_COLORS).fillna("#bdc3c7")
+        ax2.barh(range(len(prob_sorted)),
+                 prob_sorted["ProbMeetTargetEnsemble"] * 100,
+                 color=bar_colors, edgecolor="white")
+        ax2.axvline(50, color="black", linestyle="--", linewidth=1.2, alpha=0.7)
+        ax2.set_yticks(range(len(prob_sorted)))
+        ax2.set_yticklabels(prob_sorted["Facility"], fontsize=7)
+        ax2.set_xlabel("Ensemble Compliance Probability (%)", fontsize=11)
+        ax2.set_title("Compliance Probability by Facility", fontsize=12, fontweight="bold")
+        # Compact legend
+        patches = [mpatches.Patch(color=RISK_COLORS[t], label=t)
+                   for t in tier_order if RISK_COLORS.get(t)]
+        ax2.legend(handles=patches, loc="lower right", fontsize=9, frameon=True)
+        ax2.grid(axis="x", alpha=0.3)
+
+    plt.tight_layout()
+    path = os.path.join(output_dir, "figure12_risk_tier_summary.png")
+    _save(fig, path, show)
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Convenience: render all figures at once
 # ---------------------------------------------------------------------------
 
@@ -1080,6 +1176,7 @@ def plot_all(
     decomp_df: pd.DataFrame | None = None,
     horizon_summary: pd.DataFrame | None = None,
     traces_df: pd.DataFrame | None = None,
+    cluster_df: pd.DataFrame | None = None,
 ) -> list[str]:
     """Render and save all publication figures plus the dashboard.
 
@@ -1104,6 +1201,9 @@ def plot_all(
                           columns [Facility, Step, Actual, NHITS, XGBoost,
                           BNN, Ensemble].  When provided, Figure 8
                           (forecast traces) is generated.
+        cluster_df:       Cluster membership DataFrame with columns
+                          [Facility, Cluster].  When provided, Figure 12
+                          right panel shows tier breakdown by cluster.
 
     Returns:
         List of saved file paths.
@@ -1136,6 +1236,14 @@ def plot_all(
 
     if horizon_summary is not None and len(horizon_summary) > 0:
         paths.append(plot_horizon_crossover(horizon_summary, output_dir=output_dir, show=show))
+
+    # Figure 12 — always generated (cluster_df enriches right panel if provided)
+    risk_fig12 = risk_df.copy()
+    if cluster_df is not None and len(cluster_df) > 0:
+        risk_fig12 = risk_fig12.merge(
+            cluster_df[["Facility", "Cluster"]], on="Facility", how="left"
+        )
+    paths.append(plot_risk_tier_summary(risk_fig12, output_dir=output_dir, show=show))
 
     logger.info("All figures saved to %s", output_dir)
     return paths
