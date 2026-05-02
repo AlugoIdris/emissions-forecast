@@ -252,19 +252,25 @@ def plot_shap_comparison(
     """
     _apply_style()
 
-    top = shap_summary.head(top_n)
+    # Sort by average contribution across all three models
+    if "AvgContribution" not in shap_summary.columns:
+        shap_summary = shap_summary.copy()
+        shap_summary["AvgContribution"] = (
+            shap_summary[["NHITSContribution", "XGBContribution", "BNNContribution"]].mean(axis=1)
+        )
+    top = shap_summary.nlargest(top_n, "AvgContribution")
     x   = np.arange(len(top))
-    w   = 0.25
+    w   = 0.18
 
     fig, ax = plt.subplots(figsize=(14, 6))
-    ax.bar(x - w,   top["XGBContribution"],   w, label="XGBoost",  color="#1f77b4")
-    ax.bar(x,       top["BNNContribution"],    w, label="BNN",      color="#ff7f0e")
-    ax.bar(x + w,   top["NHITSContribution"],  w, label="N-HiTS",   color="#2ca02c")
+    ax.bar(x - 1.5*w, top["NHITSContribution"],  w, label="N-HiTS",   color=MODEL_COLORS["N-HiTS"],   alpha=0.9)
+    ax.bar(x - 0.5*w, top["XGBContribution"],    w, label="XGBoost",  color=MODEL_COLORS["XGBoost"],  alpha=0.9)
+    ax.bar(x + 0.5*w, top["BNNContribution"],     w, label="BNN",      color=MODEL_COLORS["BNN"],      alpha=0.9)
+    ax.bar(x + 1.5*w, top["AvgContribution"],     w, label="Average",  color="#7f7f7f",                alpha=0.9)
 
     ax.set_ylabel("SHAP Contribution (%)", fontsize=12)
     ax.set_title(
-        "Model Attribution Complementarity — XGBoost (Operational) "
-        "vs BNN (Temporal) vs N-HiTS (Time Series)",
+        f"Top {top_n} SHAP Features by Average Contribution Across N-HiTS, XGBoost, and BNN",
         fontsize=13, fontweight="bold",
     )
     ax.set_xticks(x)
@@ -785,40 +791,67 @@ def plot_shap_dependence(
     shap_raw: dict,
     X_raw: dict,
     features_of_interest: list[str] | None = None,
+    shap_summary: Optional[pd.DataFrame] = None,
     output_dir: str = "figures",
     show: bool = True,
 ) -> str:
-    """3×3 SHAP dependence plots for three key features across three models.
+    """3×3 SHAP dependence grid: top-3 features (columns) × 3 models (rows).
+
+    Each panel shows scatter of SHAP attribution (tCO₂) vs feature value,
+    a dashed-red LOWESS smoother, and the Spearman rank correlation ρ.
 
     Args:
-        shap_raw: dict mapping model key (``"nhits"``, ``"xgb"``, ``"bnn"``)
-                  to a DataFrame with columns ``[Facility, feat1, feat2, ...]``.
-        X_raw:    dict with the same keys, same shape — actual feature values
-                  corresponding to the SHAP values.
-        features_of_interest: list of exactly 3 feature names to plot.
-                  Defaults to ``["Energy_MWh", "Production", "EmissionsLag1"]``.
-        output_dir: Directory to save the figure.
-        show:       Display inline if True.
+        shap_raw:             dict mapping model key (``"nhits"``, ``"xgb"``,
+                              ``"bnn"``) to a SHAP value DataFrame.
+        X_raw:                dict with the same keys — actual feature values.
+        features_of_interest: Explicit list of 3 feature names.  When None,
+                              the top 3 by average SHAP contribution are taken
+                              from ``shap_summary`` (if provided) or computed
+                              from mean absolute SHAP across all models.
+        shap_summary:         Aggregated SHAP importance table (optional);
+                              used to auto-select top-3 features.
+        output_dir:           Directory to save the figure.
+        show:                 Display inline if True.
 
     Returns:
         Saved file path.
     """
-    if features_of_interest is None:
-        features_of_interest = ["Energy_MWh", "Production", "EmissionsLag1", "EmissionsLag3"]
+    from scipy.stats import spearmanr
+    from statsmodels.nonparametric.smoothers_lowess import lowess
 
     _apply_style()
 
-    model_keys   = ["nhits",  "xgb",     "bnn"]
-    model_labels = ["N-HiTS", "XGBoost", "BNN"]
-    model_colors = ["#1f77b4", "#ff7f0e", "#2ca02c"]
+    # ── Auto-select top-3 features ──────────────────────────────────────
+    if features_of_interest is None:
+        if shap_summary is not None and "AvgContribution" in shap_summary.columns:
+            features_of_interest = shap_summary.nlargest(3, "AvgContribution")["Feature"].tolist()
+        elif shap_summary is not None and "Feature" in shap_summary.columns:
+            ss = shap_summary.copy()
+            contrib_cols = [c for c in ss.columns if c.endswith("Contribution")]
+            if contrib_cols:
+                ss["_avg"] = ss[contrib_cols].mean(axis=1)
+                features_of_interest = ss.nlargest(3, "_avg")["Feature"].tolist()
+        if features_of_interest is None:
+            # Fallback: mean |SHAP| pooled across models
+            mean_abs: dict = {}
+            for mk in ["nhits", "xgb", "bnn"]:
+                df = shap_raw.get(mk)
+                if df is not None and not df.empty:
+                    for col in df.select_dtypes(include="number").columns:
+                        mean_abs[col] = mean_abs.get(col, 0.0) + df[col].abs().mean()
+            features_of_interest = sorted(mean_abs, key=mean_abs.get, reverse=True)[:3]
 
-    color_feature = features_of_interest[3]  # EmissionsLag3 used for colouring
+    features_of_interest = list(features_of_interest)[:3]
 
-    n_feat = len(features_of_interest)
+    # Per spec: N-HiTS green, XGBoost orange, BNN purple
+    model_keys   = ["nhits",    "xgb",      "bnn"]
+    model_labels = ["N-HiTS",   "XGBoost",  "BNN"]
+    model_colors = ["#2ca02c",  "#ff7f0e",  "#9467bd"]
+
     fig, axes = plt.subplots(
         nrows=len(model_keys),
-        ncols=n_feat,
-        figsize=(4.5 * n_feat, 11),
+        ncols=len(features_of_interest),
+        figsize=(5 * len(features_of_interest), 4 * len(model_keys)),
         sharex="col",
     )
 
@@ -831,9 +864,6 @@ def plot_shap_dependence(
                 axes[row, col].set_visible(False)
             continue
 
-        # colour by EmissionsLag1 value (normalised)
-        c_vals = x_df[color_feature].values if color_feature in x_df.columns else None
-
         for col, feat in enumerate(features_of_interest):
             ax = axes[row, col]
 
@@ -844,33 +874,45 @@ def plot_shap_dependence(
             x_feat   = x_df[feat].values
             shap_val = shap_df[feat].values
 
-            sc = ax.scatter(
-                x_feat, shap_val,
-                c=c_vals,
-                cmap="coolwarm",
-                alpha=0.6,
-                s=20,
-                linewidths=0,
-            )
+            # Scatter
+            ax.scatter(x_feat, shap_val, color=mc, alpha=0.45, s=18,
+                       linewidths=0, zorder=2)
+            ax.axhline(0, color="black", linewidth=0.8, linestyle="--", alpha=0.4)
 
-            ax.axhline(0, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
+            # LOWESS smoother (dashed red)
+            try:
+                sort_idx = np.argsort(x_feat)
+                smoothed = lowess(shap_val[sort_idx], x_feat[sort_idx],
+                                  frac=0.4, return_sorted=True)
+                ax.plot(smoothed[:, 0], smoothed[:, 1],
+                        color="#e74c3c", linewidth=2, linestyle="--", zorder=4)
+            except Exception:
+                pass
+
+            # Spearman ρ annotation
+            try:
+                rho, pval = spearmanr(x_feat, shap_val)
+                sig = "*" if pval < 0.05 else ""
+                ax.text(0.97, 0.97, fr"$\rho={rho:.2f}{sig}$",
+                        transform=ax.transAxes, ha="right", va="top",
+                        fontsize=9,
+                        bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.7))
+            except Exception:
+                pass
 
             if col == 0:
-                ax.set_ylabel(f"{ml}\nSHAP value", fontsize=10)
+                ax.set_ylabel(fr"{ml}" + "\n" + r"SHAP (tCO$_2$)", fontsize=10)
             if row == 0:
                 ax.set_title(feat.replace("_", " "), fontsize=11, fontweight="bold")
             if row == len(model_keys) - 1:
                 ax.set_xlabel(feat.replace("_", " "), fontsize=10)
 
-            ax.grid(alpha=0.3)
-
-        # colorbar on the rightmost column of each row
-        cbar = fig.colorbar(sc, ax=axes[row, :], fraction=0.015, pad=0.02)
-        cbar.set_label(color_feature.replace("_", " "), fontsize=8)
+            ax.grid(alpha=0.25)
 
     fig.suptitle(
-        "SHAP Dependence Plots — Effect of Operational Features on Emissions Forecast",
-        fontsize=13, fontweight="bold", y=1.01,
+        r"SHAP Dependence — Top 3 Features by Avg Attribution (tCO$_2$)"
+        "  |  Dashed red = LOWESS  |  $\\rho$ = Spearman",
+        fontsize=12, fontweight="bold", y=1.01,
     )
     plt.tight_layout()
 
@@ -1229,7 +1271,11 @@ def plot_all(
         ))
 
     if shap_raw is not None and X_raw is not None:
-        paths.append(plot_shap_dependence(shap_raw, X_raw, output_dir=output_dir, show=show))
+        paths.append(plot_shap_dependence(
+            shap_raw, X_raw,
+            shap_summary=shap_summary,
+            output_dir=output_dir, show=show,
+        ))
 
     if decomp_df is not None and len(decomp_df) > 0:
         paths.append(plot_variance_decomposition(decomp_df, output_dir=output_dir, show=show))

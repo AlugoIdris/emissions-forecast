@@ -20,6 +20,7 @@ shap>=0.45
 # Visualisation
 matplotlib>=3.8
 seaborn>=0.13
+statsmodels>=0.14
 
 # Utilities
 tqdm>=4.66
