@@ -258,25 +258,26 @@ def plot_shap_comparison(
         shap_summary["AvgContribution"] = (
             shap_summary[["NHITSContribution", "XGBContribution", "BNNContribution"]].mean(axis=1)
         )
-    top = shap_summary.nlargest(top_n, "AvgContribution")
-    x   = np.arange(len(top))
+    # Top-N sorted descending so highest feature is at the top
+    top = shap_summary.nlargest(top_n, "AvgContribution").sort_values("AvgContribution", ascending=True)
+    y   = np.arange(len(top))
     w   = 0.18
 
-    fig, ax = plt.subplots(figsize=(14, 6))
-    ax.bar(x - 1.5*w, top["NHITSContribution"],  w, label="N-HiTS",   color=MODEL_COLORS["N-HiTS"],   alpha=0.9)
-    ax.bar(x - 0.5*w, top["XGBContribution"],    w, label="XGBoost",  color=MODEL_COLORS["XGBoost"],  alpha=0.9)
-    ax.bar(x + 0.5*w, top["BNNContribution"],     w, label="BNN",      color=MODEL_COLORS["BNN"],      alpha=0.9)
-    ax.bar(x + 1.5*w, top["AvgContribution"],     w, label="Average",  color="#7f7f7f",                alpha=0.9)
+    fig, ax = plt.subplots(figsize=(10, max(6, top_n * 0.55)))
+    ax.barh(y - 1.5*w, top["NHITSContribution"], w, label="N-HiTS",  color=MODEL_COLORS["N-HiTS"],  alpha=0.9)
+    ax.barh(y - 0.5*w, top["XGBContribution"],   w, label="XGBoost", color=MODEL_COLORS["XGBoost"], alpha=0.9)
+    ax.barh(y + 0.5*w, top["BNNContribution"],    w, label="BNN",     color=MODEL_COLORS["BNN"],     alpha=0.9)
+    ax.barh(y + 1.5*w, top["AvgContribution"],    w, label="Average", color="#7f7f7f",               alpha=0.9)
 
-    ax.set_ylabel("SHAP Contribution (%)", fontsize=12)
+    ax.set_xlabel("SHAP Contribution (%)", fontsize=12)
     ax.set_title(
         f"Top {top_n} SHAP Features by Average Contribution Across N-HiTS, XGBoost, and BNN",
         fontsize=13, fontweight="bold",
     )
-    ax.set_xticks(x)
-    ax.set_xticklabels(top["Feature"], rotation=45, ha="right")
-    ax.legend()
-    ax.grid(axis="y", alpha=0.3)
+    ax.set_yticks(y)
+    ax.set_yticklabels(top["Feature"], fontsize=10)
+    ax.legend(loc="lower right")
+    ax.grid(axis="x", alpha=0.3)
     plt.tight_layout()
 
     path = os.path.join(output_dir, "figure3_shap_comparison.png")
@@ -504,7 +505,7 @@ def plot_stakeholder_dashboard(
 
 
 # ---------------------------------------------------------------------------
-# Facility-level dot-and-whisker accuracy plot
+# Figure 6 — Facility-level dot-and-whisker accuracy plot
 # ---------------------------------------------------------------------------
 
 def plot_facility_accuracy(
