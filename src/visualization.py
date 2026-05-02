@@ -822,16 +822,24 @@ def plot_shap_dependence(
     _apply_style()
 
     # ── Auto-select top-3 features ──────────────────────────────────────
+    # Determine which features are actually available in the raw SHAP data
+    available_feats: set = set()
+    for mk in ["nhits", "xgb", "bnn"]:
+        df = shap_raw.get(mk)
+        if df is not None and not df.empty:
+            available_feats.update(df.select_dtypes(include="number").columns.tolist())
+
     if features_of_interest is None:
+        candidates: list = []
         if shap_summary is not None and "AvgContribution" in shap_summary.columns:
-            features_of_interest = shap_summary.nlargest(3, "AvgContribution")["Feature"].tolist()
+            candidates = shap_summary.sort_values("AvgContribution", ascending=False)["Feature"].tolist()
         elif shap_summary is not None and "Feature" in shap_summary.columns:
             ss = shap_summary.copy()
             contrib_cols = [c for c in ss.columns if c.endswith("Contribution")]
             if contrib_cols:
                 ss["_avg"] = ss[contrib_cols].mean(axis=1)
-                features_of_interest = ss.nlargest(3, "_avg")["Feature"].tolist()
-        if features_of_interest is None:
+                candidates = ss.sort_values("_avg", ascending=False)["Feature"].tolist()
+        if not candidates:
             # Fallback: mean |SHAP| pooled across models
             mean_abs: dict = {}
             for mk in ["nhits", "xgb", "bnn"]:
@@ -839,7 +847,9 @@ def plot_shap_dependence(
                 if df is not None and not df.empty:
                     for col in df.select_dtypes(include="number").columns:
                         mean_abs[col] = mean_abs.get(col, 0.0) + df[col].abs().mean()
-            features_of_interest = sorted(mean_abs, key=mean_abs.get, reverse=True)[:3]
+            candidates = sorted(mean_abs, key=mean_abs.get, reverse=True)
+        # Keep only features present in raw SHAP, take top 3
+        features_of_interest = [f for f in candidates if f in available_feats][:3]
 
     features_of_interest = list(features_of_interest)[:3]
 
@@ -889,11 +899,13 @@ def plot_shap_dependence(
             except Exception:
                 pass
 
-            # Spearman ρ annotation
+            # Spearman ρ + mean SHAP μ annotation
             try:
                 rho, pval = spearmanr(x_feat, shap_val)
-                sig = "*" if pval < 0.05 else ""
-                ax.text(0.97, 0.97, fr"$\rho={rho:.2f}{sig}$",
+                sig  = "*" if pval < 0.05 else ""
+                mu   = shap_val.mean()
+                ax.text(0.97, 0.97,
+                        fr"$\rho={rho:.2f}{sig}$" + "\n" + fr"$\mu={mu:+.3f}$",
                         transform=ax.transAxes, ha="right", va="top",
                         fontsize=9,
                         bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.7))
